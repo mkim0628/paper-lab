@@ -150,6 +150,18 @@ def write_text(arxiv_id: str, name: str, content: str) -> bool:
     return True
 
 
+def snapshot_review(arxiv_id: str) -> None:
+    """현재 review.md를 (시간 간격 무시하고) history에 보관. LLM 생성 등 덮어쓰기 직전에 사용."""
+    d = paper_dir(arxiv_id)
+    cur = d / "review.md"
+    if not cur.exists():
+        return
+    hist = d / "review.history"
+    hist.mkdir(exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    (hist / f"{stamp}.md").write_text(cur.read_text(encoding="utf-8"), encoding="utf-8")
+
+
 def list_history(arxiv_id: str) -> list[str]:
     hist = paper_dir(arxiv_id) / "review.history"
     return sorted((f.stem for f in hist.glob("*.md")), reverse=True) if hist.exists() else []

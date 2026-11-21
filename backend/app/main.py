@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
@@ -8,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import arxiv, config, storage
+from . import arxiv, config, fulltext, llm, localsearch, review_gen, storage
 
 log = logging.getLogger("paperlab")
 
@@ -65,6 +67,22 @@ async def _fetch_pdf(arxiv_id: str) -> None:
         log.warning("pdf download failed for %s: %s", arxiv_id, e)
         if storage.exists(arxiv_id):
             storage.update_meta(arxiv_id, pdf_status="failed")
+        return
+    await _extract(arxiv_id)
+
+
+async def _extract(arxiv_id: str) -> None:
+    try:
+        text, pages = await asyncio.to_thread(fulltext.extract, storage.paper_dir(arxiv_id) / "paper.pdf")
+        body = re.sub(r"</?page[^>]*>", "", text)
+        if len(body.strip()) < 30 * pages:  # 스캔본 등 텍스트가 거의 없는 경우
+            raise ValueError("추출된 텍스트가 너무 적습니다 (스캔 PDF?)")
+        storage.write_text(arxiv_id, "fulltext.md", text)
+        storage.update_meta(arxiv_id, fulltext_status="ready", pages=pages)
+    except Exception as e:  # noqa: BLE001
+        log.warning("fulltext extraction failed for %s: %s", arxiv_id, e)
+        if storage.exists(arxiv_id):
+            storage.update_meta(arxiv_id, fulltext_status="failed")
 
 
 @app.post("/api/papers", status_code=201)
@@ -81,6 +99,66 @@ async def add_paper(body: AddPaper, bg: BackgroundTasks):
     meta = storage.create(meta)
     bg.add_task(_fetch_pdf, meta["arxiv_id"])
     return meta
+
+
+# ---------- LLM 프로필 (Settings) ----------
+class ProfileBody(BaseModel):
+    provider: str = "anthropic"
+    model: str = Field(min_length=1)
+    api_key: str | None = None  # 비우면 기존 키 유지
+    base_url: str | None = None
+    region: str | None = None
+    project_id: str | None = None
+    ca_bundle: str | None = None
+
+
+@app.get("/api/settings/llm")
+def get_llm_settings():
+    return llm.list_profiles()
+
+
+@app.put("/api/settings/llm/profiles/{name}")
+def put_profile(name: str, body: ProfileBody):
+    if not name.strip() or len(name) > 60:
+        raise HTTPException(400, "invalid profile name")
+    try:
+        llm.upsert_profile(name, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return llm.list_profiles()
+
+
+@app.delete("/api/settings/llm/profiles/{name}")
+def del_profile(name: str):
+    llm.delete_profile(name)
+    return llm.list_profiles()
+
+
+class ActiveBody(BaseModel):
+    name: str
+
+
+@app.post("/api/settings/llm/active")
+def set_active(body: ActiveBody):
+    try:
+        llm.set_active(body.name)
+    except KeyError:
+        raise HTTPException(404, "profile not found")
+    return llm.list_profiles()
+
+
+@app.post("/api/settings/llm/test")
+async def test_llm():
+    try:
+        out = await asyncio.to_thread(llm.complete, "Reply with exactly: ok", "ping", 20)
+    except llm.LLMError as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True, "reply": out[:100], "profile": llm.active_profile()["name"]}
+
+
+@app.get("/api/local-search")
+def local_search(q: str = Query(min_length=1)):
+    return localsearch.search(q)
 
 
 @app.get("/api/papers")
@@ -103,6 +181,45 @@ async def retry_pdf(arxiv_id: str, bg: BackgroundTasks):
     storage.update_meta(aid, pdf_status="pending")
     bg.add_task(_fetch_pdf, aid)
     return {"ok": True}
+
+
+class GenBody(BaseModel):
+    section: int | None = Field(None, ge=1, description="지정하면 해당 번호(## N.) 섹션만 재생성")
+
+
+@app.post("/api/papers/{arxiv_id:path}/generate-review")
+async def generate_review(arxiv_id: str, body: GenBody):
+    """LLM 초안 생성. 결과는 저장하지 않고 반환 (프론트가 에디터에 반영→자동저장). 덮어쓰기 전 현재본은 history에 보관."""
+    aid = _require(arxiv_id)
+    ft = storage.read_text(aid, "fulltext.md")
+    if not ft:
+        raise HTTPException(409, "본문 텍스트가 아직 없습니다 (PDF 다운로드/추출 필요)")
+    meta = storage.get_meta(aid)
+    current = storage.read_text(aid, "review.md")
+    try:
+        if body.section:
+            content = await asyncio.to_thread(review_gen.regenerate_section, meta, ft, current, body.section)
+        else:
+            tpl = storage.REVIEW_TEMPLATE.format(
+                title=meta["title"], authors=", ".join(meta["authors"][:6]), arxiv_id=meta["arxiv_id"]
+            )
+            content = await asyncio.to_thread(review_gen.generate_full, meta, ft, tpl)
+    except llm.LLMError as e:
+        raise HTTPException(502, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    storage.snapshot_review(aid)
+    meta = storage.update_meta(aid, ai_draft=True)
+    return {"content": content, "meta": meta}
+
+
+@app.post("/api/papers/{arxiv_id:path}/reextract")
+async def reextract(arxiv_id: str):
+    aid = _require(arxiv_id)
+    if not (storage.paper_dir(aid) / "paper.pdf").exists():
+        raise HTTPException(409, "pdf not available")
+    await _extract(aid)
+    return storage.get_meta(aid)
 
 
 class ReviewBody(BaseModel):
@@ -144,6 +261,7 @@ class MetaPatch(BaseModel):
     status: str | None = None
     tags: list[str] | None = None
     rating: int | None = Field(None, ge=1, le=5)
+    ai_draft: bool | None = None  # False로 바꾸면 "사람이 검증함"
 
 
 @app.patch("/api/papers/{arxiv_id:path}")

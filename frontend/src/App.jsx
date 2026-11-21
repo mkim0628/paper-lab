@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import Library from "./Library.jsx";
 import Search from "./Search.jsx";
+import Settings from "./Settings.jsx";
 import PaperView from "./PaperView.jsx";
 
 // 간단한 해시 라우터: #/ (라이브러리), #/search, #/paper/<arxiv_id>
@@ -24,10 +25,11 @@ export default function App() {
         <nav>
           <a href="#/" className={route === "/" ? "on" : ""}>라이브러리</a>
           <a href="#/search" className={route === "/search" ? "on" : ""}>arXiv 검색 / 추가</a>
+          <a href="#/settings" className={route === "/settings" ? "on" : ""}>설정</a>
         </nav>
       </header>
       <main>
-        {paperId ? <PaperView key={paperId} id={paperId} /> : route === "/search" ? <Search /> : <Library />}
+        {paperId ? <PaperView key={paperId} id={paperId} /> : route === "/search" ? <Search /> : route === "/settings" ? <Settings /> : <Library />}
       </main>
     </div>
   );

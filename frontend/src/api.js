@@ -25,6 +25,14 @@ export const api = {
   history: (id) => req(`/papers/${id}/review/history`),
   historyItem: (id, stamp) => req(`/papers/${id}/review/history/${stamp}`),
   retryPdf: (id) => req(`/papers/${id}/retry-pdf`, { method: "POST" }),
+  generate: (id, section) => req(`/papers/${id}/generate-review`, { method: "POST", body: section ? { section } : {} }),
+  localSearch: (q) => req(`/local-search?q=${encodeURIComponent(q)}`),
+  llm: () => req("/settings/llm"),
+  llmPut: (name, body) => req(`/settings/llm/profiles/${encodeURIComponent(name)}`, { method: "PUT", body }),
+  llmDel: (name) => req(`/settings/llm/profiles/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  llmActive: (name) => req("/settings/llm/active", { method: "POST", body: { name } }),
+  llmTest: () => req("/settings/llm/test", { method: "POST" }),
+  reextract: (id) => req(`/papers/${id}/reextract`, { method: "POST" }),
   pdfUrl: (id) => `/api/papers/${id}/pdf`,
 };
 
