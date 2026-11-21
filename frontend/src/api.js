@@ -47,6 +47,9 @@ export const api = {
   related: (id) => req(`/papers/${id}/related`),
   relatedRefresh: (id) => req(`/papers/${id}/related/refresh`, { method: "POST" }),
   relatedGuide: (id) => req(`/papers/${id}/related/guide`, { method: "POST" }),
+  chat: (id) => req(`/papers/${id}/chat`),
+  chatClear: (id) => req(`/papers/${id}/chat`, { method: "DELETE" }),
+  skeleton: (id) => req(`/papers/${id}/review/skeleton`, { method: "POST" }),
   pdfUrl: (id) => `/api/papers/${id}/pdf`,
 };
 

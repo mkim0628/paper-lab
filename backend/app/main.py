@@ -8,11 +8,11 @@ import shutil
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import arxiv, codefinder, config, figures, fulltext, llm, localsearch, related, review_gen, storage
+from . import arxiv, chat, codefinder, config, figures, fulltext, llm, localsearch, related, review_gen, storage
 
 log = logging.getLogger("paperlab")
 
@@ -433,6 +433,69 @@ def list_figures(arxiv_id: str):
     aid = _require(arxiv_id)
     data = _load_figs(aid) or {"page_sizes": [], "items": [], "stats": {}}
     return {**data, "status": storage.get_meta(aid).get("figures_status")}
+
+
+# ---------- Q&A 채팅 ----------
+class ChatBody(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+
+
+@app.get("/api/papers/{arxiv_id:path}/chat")
+def get_chat(arxiv_id: str):
+    return {"messages": chat.history(_require(arxiv_id))}
+
+
+@app.delete("/api/papers/{arxiv_id:path}/chat", status_code=204)
+def clear_chat(arxiv_id: str):
+    chat.clear(_require(arxiv_id))
+
+
+def _sse(obj: dict) -> str:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+@app.post("/api/papers/{arxiv_id:path}/chat")
+def post_chat(arxiv_id: str, body: ChatBody):
+    """질문 1건 → 답변을 SSE 로 스트리밍. 대화는 논문별로 저장된다."""
+    aid = _require(arxiv_id)
+    ft = storage.read_text(aid, "fulltext.md")
+    if not ft:
+        raise HTTPException(409, "본문 텍스트가 아직 없습니다 (PDF 다운로드/추출 필요)")
+    try:
+        prof = llm.active_profile()  # 스트림을 시작하기 전에 프로필 오류를 일반 HTTP 오류로 알린다
+    except llm.LLMError as e:
+        raise HTTPException(502, str(e))
+    meta = storage.get_meta(aid)
+    system = chat.system_blocks(meta, ft, _load_figs(aid).get("items"))
+    msgs = chat.history(aid)
+    msgs.append({"role": "user", "content": body.message, "ts": chat.now()})
+    chat.save(aid, msgs)  # 사용자 질문은 응답 전에 저장 (중단/오류에도 남김)
+
+    def gen():
+        parts: list[str] = []
+        err = None
+        try:
+            for delta in llm.stream(system, chat.api_messages(msgs), max_tokens=3000, profile=prof):
+                parts.append(delta)
+                yield _sse({"delta": delta})
+        except llm.LLMError as e:
+            err = str(e)
+            yield _sse({"error": err})
+        finally:
+            text = "".join(parts).strip()
+            if text or err:
+                msgs.append({"role": "assistant", "content": text or "(응답 없음)", "ts": chat.now(), **({"error": err} if err else {})})
+                chat.save(aid, msgs)
+        if not err:
+            yield _sse({"done": True})
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/papers/{arxiv_id:path}/review/skeleton")
+def review_skeleton(arxiv_id: str):
+    aid = _require(arxiv_id)
+    return {"content": storage.skeleton(storage.get_meta(aid))}
 
 
 # ---------- 관련 연구 ----------

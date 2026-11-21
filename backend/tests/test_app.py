@@ -117,14 +117,16 @@ def test_full_flow(client):
     assert client.get("/api/search", params={"q": "attention"}).json()["items"][0]["in_library"] is True
 
     rv = client.get("/api/papers/1706.03762/review").json()
-    assert "## 8. 약점" in rv["content"]
+    assert rv["content"] == ""  # 새 논문의 리뷰는 비어 있고, 화면이 작성/AI 생성을 안내한다
+    sk = client.post("/api/papers/1706.03762/review/skeleton").json()["content"]
+    assert "## 7. 주장-근거 검증" in sk and "Attention Is All You Need" in sk
     assert client.put("/api/papers/1706.03762/review", json={"content": "v1"}).json()["changed"] is True
     assert client.put("/api/papers/1706.03762/review", json={"content": "v1"}).json()["changed"] is False
     client.put("/api/papers/1706.03762/review", json={"content": "v2"})
     assert client.get("/api/papers/1706.03762/review").json()["content"] == "v2"
     hist = client.get("/api/papers/1706.03762/review/history").json()
     assert len(hist) == 1  # 60초 이내 연속 저장은 한 번만 보관
-    assert "약점" in client.get(f"/api/papers/1706.03762/review/history/{hist[0]}").json()["content"]
+    assert client.get(f"/api/papers/1706.03762/review/history/{hist[0]}").json()["content"] == "v1"
 
     r = client.patch("/api/papers/1706.03762", json={"status": "reviewed", "tags": ["nlp"], "rating": 5})
     assert r.json()["status"] == "reviewed" and r.json()["tags"] == ["nlp"]

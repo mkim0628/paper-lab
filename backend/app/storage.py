@@ -16,50 +16,34 @@ REVIEW_TEMPLATE = """# {title}
 
 > {authors} · arXiv:{arxiv_id}
 
-## 1. TL;DR (한 줄 요약)
+## 1. 한눈에 보기
+(한 줄 요약 / 핵심 기여 / 성능 / 읽을 가치)
 
-## 2. 문제 정의 & 동기
-- 해결하려는 문제:
-- 기존 방법의 한계:
+## 2. 문제 정의
+(풀려는 문제, 기존 방법의 한계)
 
-## 3. 핵심 기여 (Claims)
--
+## 3. 핵심 아이디어
+(직관 → 세 줄 이내의 핵심)
 
-## 4. 방법
-- 핵심 아이디어 (vs. 엔지니어링):
-- 수식 / 아키텍처 / 알고리즘:
+## 4. 방법 상세
+(단계별 메커니즘, 수식, 그림)
 
-## 5. 실험 설정
-- 데이터셋:
-- 베이스라인:
-- 메트릭:
-- 하이퍼파라미터 / 컴퓨트:
+## 5. 설계 근거 (왜 이렇게 했나)
+(대안과의 비교, 선택의 이유)
 
-## 6. 결과 요약
+## 6. 실험과 결과
+(설정, 핵심 표/그림, 해석)
 
-## 7. 강점
--
+## 7. 주장-근거 검증
+| # | 저자의 주장 | 근거 | 평가 |
+|---|---|---|---|
 
-## 8. 약점 / 한계
-- ablation 충분성, 공정한 비교, 통계적 유의성, 일반화:
+## 8. 한계와 열린 문제
 
-## 9. 재현성 체크리스트
-- [ ] 공식 코드 공개
-- [ ] 데이터 공개 / 접근 가능
-- [ ] 하이퍼파라미터 전부 기재
-- [ ] 시드 / 분산 보고
-- [ ] 컴퓨트 요구량 기재
+## 9. 읽은 뒤에
+(후속/관련 연구, 구현 시 주의점)
 
-## 10. 관련 연구 & 차별점
-
-## 11. 의문점 / 후속 아이디어
-
-## 12. 종합 평가
-- Novelty (1-5):
-- Soundness (1-5):
-- Significance (1-5):
-- Clarity (1-5):
-- 재현 난이도:
+## 10. 용어집
 """
 
 
@@ -78,6 +62,12 @@ def _write_atomic(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
+def skeleton(meta: dict) -> str:
+    return REVIEW_TEMPLATE.format(
+        title=meta["title"], authors=", ".join(meta["authors"][:6]) + (" et al." if len(meta["authors"]) > 6 else ""), arxiv_id=meta["arxiv_id"]
+    )
+
+
 def exists(arxiv_id: str) -> bool:
     return (paper_dir(arxiv_id) / "meta.json").exists()
 
@@ -86,10 +76,7 @@ def create(meta: dict) -> dict:
     d = paper_dir(meta["arxiv_id"])
     meta = {**meta, "added_at": _now(), "status": "to-read", "tags": [], "rating": None, "pdf_status": "pending"}
     _write_atomic(d / "meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
-    review = REVIEW_TEMPLATE.format(
-        title=meta["title"], authors=", ".join(meta["authors"][:6]) + (" et al." if len(meta["authors"]) > 6 else ""), arxiv_id=meta["arxiv_id"]
-    )
-    _write_atomic(d / "review.md", review)
+    _write_atomic(d / "review.md", "")  # 새 논문의 리뷰는 비어 있다 (빈 템플릿 대신 화면에서 작성/AI 생성을 안내)
     _write_atomic(d / "notes.md", "")
     return meta
 

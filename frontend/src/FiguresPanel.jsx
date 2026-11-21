@@ -4,7 +4,7 @@ import { api } from "./api.js";
 const BADGE = (it) => (it.source === "manual" ? "수동" : it.edited ? "수정됨" : "자동");
 
 /** PDF 페이지 이미지 위에서 영역을 드래그로 지정/이동/크기조절. 좌표는 PDF pt 단위, 화면 위치는 % 로 표시. */
-function BBoxEditor({ id, pageSizes, init, isNew, onSave, onCancel }) {
+export function BBoxEditor({ id, pageSizes, init, isNew, onSave, onCancel }) {
   const [page, setPage] = useState(init.page);
   const [kind, setKind] = useState(init.kind || "figure");
   const [rect, setRect] = useState(init.bbox);
@@ -99,20 +99,19 @@ export function FigureLightbox({ id, item, onClose, onGoto, onInsert }) {
   );
 }
 
-export default function FiguresPanel({ id, meta, data, reload, onInsert, onOpen }) {
+/** 그림/표 선택 모달: 리뷰에 삽입, 영역 수정, 숨김/복원, 수동 추가, 재추출 (별도 '탭'이 아니라 리뷰 작성 중 호출하는 도구) */
+export default function FigurePicker({ id, meta, data, reload, onInsert, onClose }) {
   const [filter, setFilter] = useState("all");
   const [showHidden, setShowHidden] = useState(false);
-  const [edit, setEdit] = useState(null); // {item?, ...init}
+  const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const run = async (fn) => { setBusy(true); setErr(""); try { await fn(); await reload(); } catch (e) { setErr(e.message); } setBusy(false); };
-  if (!data) return <p className="pad muted">불러오는 중…</p>;
   const extracting = meta.figures_status === "extracting";
-  const items = data.items.filter((i) => (filter === "all" || i.kind === filter) && (showHidden ? i.hidden : !i.hidden));
-  const nHidden = data.items.filter((i) => i.hidden).length;
-  const noRegion = data.items.filter((i) => !i.bbox && !i.hidden).length;
-
+  const items = (data?.items || []).filter((i) => (filter === "all" || i.kind === filter) && (showHidden ? i.hidden : !i.hidden));
+  const nHidden = (data?.items || []).filter((i) => i.hidden).length;
+  const noRegion = (data?.items || []).filter((i) => !i.bbox && !i.hidden).length;
   const save = async (v) => {
     const it = edit.item;
     await run(() => (it ? api.figPatch(id, it.id, { bbox: v.bbox }) : api.figAdd(id, { page: v.page, kind: v.kind, label: v.label || undefined, caption: v.caption, bbox: v.bbox })));
@@ -120,39 +119,37 @@ export default function FiguresPanel({ id, meta, data, reload, onInsert, onOpen 
   };
 
   return (
-    <div className="code-panel">
-      <div className="row">
-        <button disabled={busy || extracting} onClick={() => run(() => api.figuresExtract(id))}>{extracting ? "추출 중…" : "🔄 다시 추출"}</button>
-        <button disabled={!data.page_sizes.length} onClick={() => setEdit({ page: 1, bbox: null, kind: "figure" })}>＋ 영역 직접 지정</button>
-        <select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">그림+표</option><option value="figure">그림만</option><option value="table">표만</option></select>
-        {nHidden > 0 && <label className="muted"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> 숨긴 항목 {nHidden}</label>}
-        {data.stats?.captions != null && <span className="muted">캡션 {data.stats.captions}개 중 영역 {data.stats.with_region}개 자동 인식</span>}
-      </div>
-      {err && <p className="error">{err}</p>}
-      {noRegion > 0 && <div className="banner">영역을 찾지 못한 항목 {noRegion}개: "영역 지정"으로 직접 잡아 주세요 (그림 없는 표, 래스터가 아닌 특수 레이아웃 등).</div>}
-      {meta.figures_status === "failed" && <div className="banner">자동 추출에 실패했습니다. "다시 추출"을 눌러 보거나 직접 지정하세요.</div>}
-      {data.items.length === 0 && !extracting && <p className="muted">추출된 그림/표가 없습니다.</p>}
-
-      <div className="figs-grid">
-        {items.map((it) => (
-          <div key={it.id} className="fig-card">
-            <div className="thumb" onClick={() => onOpen(it)}>
-              {it.file ? <img src={api.figUrl(id, it)} alt={it.label} loading="lazy" /> : <div className="noimg">영역 없음</div>}
+    <div className="modal" onClick={onClose}>
+      <div className="editor-modal picker" onClick={(e) => e.stopPropagation()}>
+        <div className="row"><b>🖼 그림·표 삽입</b>
+          <span className="muted">논문에서 자동으로 추출한 {data?.items?.length || 0}개 (캡션 {data?.stats?.captions ?? 0}개 중 영역 {data?.stats?.with_region ?? 0}개 인식)</span>
+          <button style={{ marginLeft: "auto" }} onClick={onClose}>닫기</button></div>
+        <div className="row">
+          <select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">그림+표</option><option value="figure">그림만</option><option value="table">표만</option></select>
+          <button disabled={busy || extracting} onClick={() => run(() => api.figuresExtract(id))}>{extracting ? "추출 중…" : "🔄 다시 추출"}</button>
+          <button disabled={!data?.page_sizes?.length} onClick={() => setEdit({ page: 1, bbox: null, kind: "figure" })}>＋ 영역 직접 지정</button>
+          {nHidden > 0 && <label className="muted"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> 숨긴 항목 {nHidden}</label>}
+        </div>
+        {err && <p className="error">{err}</p>}
+        {noRegion > 0 && <div className="banner block">영역을 찾지 못한 항목 {noRegion}개: "영역 지정"으로 직접 잡아 주세요.</div>}
+        <div className="figs-grid">
+          {items.map((it) => (
+            <div key={it.id} className="fig-card">
+              <div className="thumb">{it.file ? <img src={api.figUrl(id, it)} alt={it.label} loading="lazy" /> : <div className="noimg">영역 없음</div>}</div>
+              <div><b>{it.label}</b> <span className="muted">p.{it.page} · {BADGE(it)}</span></div>
+              <div className="muted clamp">{it.caption.replace(/^(Figure|Fig\.|Table)\s*\S+\s*[:.|]?\s*/i, "")}</div>
+              <div className="row">
+                {it.bbox && !it.hidden && <button onClick={() => { onInsert(it); onClose(); }}>리뷰에 삽입</button>}
+                <button onClick={() => setEdit({ item: it, page: it.page, bbox: it.bbox, label: it.label, kind: it.kind })}>{it.bbox ? "영역 편집" : "영역 지정"}</button>
+                {it.hidden
+                  ? <button onClick={() => run(() => api.figPatch(id, it.id, { hidden: false }))}>복원</button>
+                  : <button className="danger" onClick={() => run(() => api.figDelete(id, it.id))}>{it.source === "manual" ? "삭제" : "숨김"}</button>}
+              </div>
             </div>
-            <div><b>{it.label}</b> <span className="muted">p.{it.page} · {BADGE(it)}</span></div>
-            <div className="muted clamp">{it.caption.replace(/^(Figure|Fig\.|Table)\s*\S+\s*[:.|]?\s*/i, "")}</div>
-            <div className="row">
-              {it.bbox && <button onClick={() => onInsert(it)}>삽입</button>}
-              <button onClick={() => setEdit({ item: it, page: it.page, bbox: it.bbox, label: it.label, kind: it.kind })}>{it.bbox ? "영역 편집" : "영역 지정"}</button>
-              {it.hidden
-                ? <button onClick={() => run(() => api.figPatch(id, it.id, { hidden: false }))}>복원</button>
-                : <button className="danger" onClick={() => run(() => api.figDelete(id, it.id))}>{it.source === "manual" ? "삭제" : "숨김"}</button>}
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
+        {edit && <BBoxEditor id={id} pageSizes={data.page_sizes} init={edit} isNew={!edit.item} onSave={save} onCancel={() => setEdit(null)} />}
       </div>
-
-      {edit && <BBoxEditor id={id} pageSizes={data.page_sizes} init={edit} isNew={!edit.item} onSave={save} onCancel={() => setEdit(null)} />}
     </div>
   );
 }

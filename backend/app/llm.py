@@ -146,3 +146,17 @@ def complete(system: str, user: str, max_tokens: int = 8000, profile: dict | Non
     except Exception as e:  # noqa: BLE001  SDK 예외 → 사용자 메시지 (키는 포함되지 않음)
         raise LLMError(f"LLM 호출 실패 ({type(e).__name__}): {e}") from e
     return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+
+
+def stream(system, messages: list[dict], max_tokens: int = 4000, profile: dict | None = None):
+    """텍스트 조각을 yield 하는 스트리밍 호출. `system` 은 문자열 또는 블록 리스트(cache_control 사용 가능)."""
+    p = profile or active_profile()
+    try:
+        client = _client(p)
+        with client.messages.stream(model=p["model"], max_tokens=max_tokens, system=system, messages=messages) as st:
+            for t in st.text_stream:
+                yield t
+    except LLMError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise LLMError(f"LLM 호출 실패 ({type(e).__name__}): {e}") from e
