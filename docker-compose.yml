@@ -5,4 +5,7 @@ services:
     ports: ["127.0.0.1:8000:8000"]
     volumes:
       - ./data:/data
+    environment:
+      # 선택: GitHub rate limit 완화용 토큰 (셸 환경변수 또는 .env 파일로 전달)
+      - PAPERLAB_GITHUB_TOKEN=${PAPERLAB_GITHUB_TOKEN:-}
     restart: unless-stopped

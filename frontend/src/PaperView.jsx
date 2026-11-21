@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { api, STATUSES } from "./api.js";
+import CodePanel from "./CodePanel.jsx";
 
 // [p.3] 인용을 클릭 가능한 링크로 (클릭 시 PDF가 해당 페이지로 이동)
 const render = (md) =>
@@ -31,7 +32,7 @@ export default function PaperView({ id }) {
   }, [id]);
 
   // PDF 다운로드 / 본문 추출이 끝날 때까지 폴링 (둘 다 백그라운드 작업)
-  const busyBg = meta && (meta.pdf_status === "pending" || (meta.pdf_status === "ready" && !meta.fulltext_status));
+  const busyBg = meta && (meta.pdf_status === "pending" || (meta.pdf_status === "ready" && !meta.fulltext_status) || meta.code_status === "searching");
   useEffect(() => {
     if (!busyBg) return;
     const t = setInterval(() => api.get(id).then((m) => setMeta((cur) => ({ ...cur, ...m }))), 2000);
@@ -147,7 +148,11 @@ export default function PaperView({ id }) {
             <div className="tabs">
               <button className={tab === "review" ? "on" : ""} onClick={() => setTab("review")}>리뷰</button>
               <button className={tab === "notes" ? "on" : ""} onClick={() => setTab("notes")}>메모</button>
+              <button className={tab === "code" ? "on" : ""} onClick={() => setTab("code")}>
+                코드{meta.code?.selected ? " ✓" : meta.code?.no_official ? " (직접구현)" : meta.code_status === "searching" ? " …" : ""}
+              </button>
             </div>
+            {tab !== "code" && <>
             <div className="tabs">
               <button className={mode === "edit" ? "on" : ""} onClick={() => setMode("edit")}>편집</button>
               <button className={mode === "preview" ? "on" : ""} onClick={() => setMode("preview")}>미리보기</button>
@@ -163,9 +168,10 @@ export default function PaperView({ id }) {
             )}
             {meta.fulltext_status === "failed" && <button onClick={reextract}>본문 재추출</button>}
             <span className={`save s-${save}`}>{saveLabel}</span>
+            </>}
           </div>
           {err && <p className="error pad">{err}</p>}
-          {mode === "edit"
+          {tab === "code" ? <CodePanel id={id} meta={meta} onMeta={setMeta} /> : mode === "edit"
             ? <textarea spellCheck={false} value={text[tab]} onChange={(e) => edit(e.target.value)} onBlur={flush} />
             : <div className="md" onClick={onMdClick} dangerouslySetInnerHTML={{ __html: render(text[tab]) }} />}
         </div>

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import arxiv, config, fulltext, llm, localsearch, review_gen, storage
+from . import arxiv, codefinder, config, fulltext, llm, localsearch, review_gen, storage
 
 log = logging.getLogger("paperlab")
 
@@ -18,6 +18,11 @@ log = logging.getLogger("paperlab")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     config.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+    # 서버가 백그라운드 작업 도중 종료되면 상태가 고착되므로 시작 시 정리
+    for m in storage.list_papers():
+        stale = {k: "failed" for k, v in (("pdf_status", "pending"), ("fulltext_status", "pending"), ("code_status", "searching")) if m.get(k) == v}
+        if stale:
+            storage.update_meta(m["arxiv_id"], **stale)
     yield
 
 
@@ -85,6 +90,38 @@ async def _extract(arxiv_id: str) -> None:
             storage.update_meta(arxiv_id, fulltext_status="failed")
 
 
+async def _find_code(arxiv_id: str) -> dict:
+    storage.update_meta(arxiv_id, code_status="searching")
+    try:
+        data = await codefinder.find(arxiv_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("code search failed for %s: %s", arxiv_id, e)
+        storage.update_meta(arxiv_id, code_status="failed")
+        raise
+    codefinder.save(arxiv_id, data)
+    _sync_code_meta(arxiv_id, data)
+    return data
+
+
+def _sync_code_meta(arxiv_id: str, data: dict) -> None:
+    """목록 화면용 요약을 meta 에 반영."""
+    cands = data.get("candidates", [])
+    best = next((c for c in cands if c["classification"] != "weak"), None)
+    storage.update_meta(
+        arxiv_id,
+        code_status="done",
+        code={"selected": data.get("selected"), "no_official": data.get("no_official", False),
+              "best": best["full_name"] if best else None, "best_class": best["classification"] if best else None},
+    )
+
+
+async def _find_code_bg(arxiv_id: str) -> None:
+    try:
+        await _find_code(arxiv_id)
+    except Exception:  # noqa: BLE001  (이미 로그/상태 기록됨)
+        pass
+
+
 @app.post("/api/papers", status_code=201)
 async def add_paper(body: AddPaper, bg: BackgroundTasks):
     aid = arxiv.parse_arxiv_id(body.input)
@@ -97,7 +134,9 @@ async def add_paper(body: AddPaper, bg: BackgroundTasks):
     except arxiv.ArxivError as e:
         raise HTTPException(502, str(e))
     meta = storage.create(meta)
+    meta = storage.update_meta(meta["arxiv_id"], code_status="searching")  # 화면이 완료까지 폴링하도록
     bg.add_task(_fetch_pdf, meta["arxiv_id"])
+    bg.add_task(_find_code_bg, meta["arxiv_id"])  # PDF/본문 처리 뒤에 순차 실행
     return meta
 
 
@@ -181,6 +220,62 @@ async def retry_pdf(arxiv_id: str, bg: BackgroundTasks):
     storage.update_meta(aid, pdf_status="pending")
     bg.add_task(_fetch_pdf, aid)
     return {"ok": True}
+
+
+# ---------- 공개 코드 탐색 ----------
+@app.get("/api/papers/{arxiv_id:path}/code")
+def get_code(arxiv_id: str):
+    aid = _require(arxiv_id)
+    return codefinder.load(aid) or {"candidates": [], "hf_models": [], "errors": [], "selected": None, "no_official": False, "searched_at": None}
+
+
+@app.post("/api/papers/{arxiv_id:path}/code/search")
+async def search_code(arxiv_id: str):
+    aid = _require(arxiv_id)
+    try:
+        return await _find_code(aid)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"코드 탐색 실패: {e}")
+
+
+class RepoBody(BaseModel):
+    url: str = Field(min_length=3, description="GitHub URL 또는 owner/repo")
+
+
+@app.post("/api/papers/{arxiv_id:path}/code/add")
+async def add_code(arxiv_id: str, body: RepoBody):
+    aid = _require(arxiv_id)
+    repo = codefinder.parse_repo_url(body.url)
+    if not repo:
+        raise HTTPException(400, "GitHub URL 또는 owner/repo 형식이 아닙니다")
+    try:
+        cand = await codefinder.add_manual(aid, repo)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"GitHub 조회 실패: {e}")
+    _sync_code_meta(aid, codefinder.load(aid))
+    return cand
+
+
+class SelectBody(BaseModel):
+    full_name: str | None = None  # None + no_official=False → 선택 해제
+    no_official: bool = False  # 공개 코드 없음 → 직접 구현 경로
+
+
+@app.put("/api/papers/{arxiv_id:path}/code/select")
+def select_code(arxiv_id: str, body: SelectBody):
+    aid = _require(arxiv_id)
+    data = codefinder.load(aid)
+    if body.full_name:
+        if body.full_name.lower() not in {c["full_name"].lower() for c in data.get("candidates", [])}:
+            raise HTTPException(400, "후보 목록에 없는 repo 입니다 (먼저 '직접 추가' 하세요)")
+        if body.no_official:
+            raise HTTPException(400, "repo 선택과 '공개 코드 없음'은 함께 지정할 수 없습니다")
+    data.update(selected=body.full_name, no_official=body.no_official)
+    codefinder.save(aid, data)
+    _sync_code_meta(aid, data)
+    return data
 
 
 class GenBody(BaseModel):

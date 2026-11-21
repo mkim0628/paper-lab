@@ -61,6 +61,9 @@ export default function Library() {
               <span className={`badge s-${p.status}`}>{STATUSES[p.status]}</span>
               {(p.tags || []).map((t) => <span key={t} className="tag">{t}</span>)}
               {p.rating && <span className="muted"> ★{p.rating}</span>}
+              {p.code?.selected ? <span className="tag">💻 {p.code.selected}</span>
+                : p.code?.no_official ? <span className="tag">🛠 직접 구현</span>
+                : p.code?.best ? <span className="tag">💻 {p.code.best_class}: {p.code.best}</span> : null}
             </div>
           </li>
         ))}

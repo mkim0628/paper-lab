@@ -8,7 +8,8 @@
 | arXiv Atom 파싱, ID/URL 파싱 | ✅ fixture | **실제 arXiv 응답, PDF 다운로드** |
 | 본문 추출(PyMuPDF), 로컬 전문 검색 | ✅ 합성 PDF | 실제 논문 PDF (수식·2단 레이아웃) 품질 |
 | LLM 호출 (스트리밍, base_url, 프로필, 키 마스킹) | ✅ mock Messages API | **실제 API 키 / 사내 게이트웨이** |
-| UI (검색→추가→편집→AI 초안→인용 링크→검색) | ✅ 헤드리스 브라우저 + mock | 실제 브라우저의 **PDF 뷰어 렌더링, `#page=N` 이동** |
+| 코드 탐색 규칙(링크 추출, 분류, 선택/수동추가) | ✅ pytest + mock GitHub/HF | **실제 GitHub API / HF 응답 형태, rate limit** |
+| UI (검색→추가→편집→AI 초안→인용 링크→검색→코드 선택) | ✅ 헤드리스 브라우저 + mock | 실제 브라우저의 **PDF 뷰어 렌더링, `#page=N` 이동** |
 | Docker 빌드/실행 | ❌ | **전부** |
 
 ---
@@ -79,10 +80,30 @@ LLM 프로필 등록(3번) 후에는 `SMOKE_LLM=1 ./scripts/smoke.sh` 로 연결
 **3-3. 전문 검색**
 - [ ] 라이브러리에서 "본문·리뷰·메모 포함 검색" 체크 → 논문 본문에 있는 용어 검색 시 일치 필드와 발췌문 표시
 
+## 3.5 브라우저 수동 체크리스트 — Phase 3 (공개 코드 탐색)
+
+논문을 추가하면 PDF/본문 처리 뒤 백그라운드로 자동 탐색합니다 (탭 이름에 `코드 …` 표시). 알려진 논문으로 정확도를 보세요.
+
+| # | 동작 | 기대 결과 |
+|---|---|---|
+| 1 | `1706.03762`(Transformer) 추가 → "코드" 탭 | 후보 목록. `tensorflow/tensor2tensor` 등이 상위에 와야 자연스러움 |
+| 2 | 코드 공개된 최신 논문 몇 편 추가 (예: 본인 관심 분야 논문 3편) | 공식 repo가 `공식(추정 확실)` 또는 `공식 가능성 높음`으로 분류되는지 |
+| 3 | 코드가 없는 논문 추가 | 후보 없음 또는 `커뮤니티/비공식`/`관련성 낮음`만 표시. **공식으로 잘못 분류되면 알려주세요** |
+| 4 | 각 후보의 "근거" 목록 | 논문 링크 / HF 연결 / README arXiv 언급 등 근거가 납득되는지 |
+| 5 | "이 repo 선택" → 라이브러리 목록 | 논문 카드에 `💻 owner/repo` 태그 |
+| 6 | "공개 코드 없음 → 직접 구현" | 카드에 `🛠 직접 구현` 태그 (Phase 4/5에서 이 선택으로 재현 경로 분기) |
+| 7 | GitHub URL 직접 추가 | 후보에 `출처: manual`로 추가. 존재하지 않는 repo는 오류 메시지 |
+| 8 | "다시 탐색" | 수동 추가/선택은 유지됨 |
+| 9 | HF 모델 박스 | 논문을 태그한 HF 모델이 있으면 표시 (체크포인트 후보) |
+
+- GitHub 무인증은 rate limit이 낮습니다(검색 분당 10회). 오류 배너에 rate limit이 보이면 서버 셸에서 `export PAPERLAB_GITHUB_TOKEN=<권한 없는 public 읽기용 PAT>` 후 `docker compose up -d` 하세요 (compose가 컨테이너로 전달).
+- 사내망에서 `api.github.com` / `huggingface.co`가 막혀 있으면 해당 소스는 오류 배너로 표시되고, 논문 본문 링크 기반 결과는 그대로 나옵니다.
+- ⚠️ HF API(`/api/papers/<id>`의 `githubRepo`, `/api/models?filter=arxiv:<id>`)의 응답 형태는 문서 기반 가정이라 **실제로 확인된 적이 없습니다**. HF 관련 항목(2번 근거 "Hugging Face Papers 가 연결", 9번)이 전혀 안 나오면 알려주세요.
+
 ## 4. 개발자용 자동 테스트 (선택)
 
 ```bash
-cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 22개
+cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 38개
 ```
 
 ## 5. 문제 해결

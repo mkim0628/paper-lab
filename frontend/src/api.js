@@ -33,6 +33,10 @@ export const api = {
   llmActive: (name) => req("/settings/llm/active", { method: "POST", body: { name } }),
   llmTest: () => req("/settings/llm/test", { method: "POST" }),
   reextract: (id) => req(`/papers/${id}/reextract`, { method: "POST" }),
+  code: (id) => req(`/papers/${id}/code`),
+  codeSearch: (id) => req(`/papers/${id}/code/search`, { method: "POST" }),
+  codeAdd: (id, url) => req(`/papers/${id}/code/add`, { method: "POST", body: { url } }),
+  codeSelect: (id, full_name, no_official = false) => req(`/papers/${id}/code/select`, { method: "PUT", body: { full_name, no_official } }),
   pdfUrl: (id) => `/api/papers/${id}/pdf`,
 };
 

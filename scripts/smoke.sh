@@ -46,7 +46,20 @@ req -o /dev/null -X PUT "$BASE/api/papers/$ID/notes" -H 'Content-Type: applicati
 [ "$FT" = "ready" ] && { [ "$(req "$BASE/api/local-search?q=attention+transformer" | jget "len(d)")" -ge 1 ] && ok "로컬 전문 검색 (본문)" || bad "본문 검색 실패"; }
 req -o /dev/null -X PUT "$BASE/api/papers/$ID/notes" -H 'Content-Type: application/json' -d '{"content":""}'
 
-echo "[5] LLM (선택)"
+echo "[5] 공개 코드 탐색 (GitHub API / Hugging Face — 실제 외부 접속)"
+if [ "$FT" = "ready" ] || [ "$PDF" = "ready" ]; then
+  R=$(T=120 req -X POST "$BASE/api/papers/$ID/code/search")
+  NC=$(echo "$R" | jget "len(d['candidates'])"); NE=$(echo "$R" | jget "len(d['errors'])")
+  if [ -z "$NC" ]; then bad "코드 탐색 API 실패" "$(echo "$R" | head -c 300)"
+  elif [ "$NE" -ge 3 ] 2>/dev/null && [ "$NC" = "0" ]; then bad "모든 소스 실패 (GitHub 검색×2, HF)" "$(echo "$R" | jget "'; '.join(d['errors'])")"
+  else
+    ok "탐색 완료: 후보 ${NC}건, 소스 오류 ${NE}건"
+    echo "     상위 후보: $(echo "$R" | jget "', '.join(c['full_name']+'('+c['classification']+')' for c in d['candidates'][:3])")"
+    [ "${NE:-0}" -gt 0 ] && echo "     ⚠ 일부 소스 오류: $(echo "$R" | jget "'; '.join(d['errors'])")  (GitHub 무인증 rate limit이면 PAPERLAB_GITHUB_TOKEN 설정)"
+  fi
+else echo "  (건너뜀 — PDF 없음)"; fi
+
+echo "[6] LLM (선택)"
 if [ "${SMOKE_LLM:-0}" = "1" ]; then
   R=$(T=120 req -X POST "$BASE/api/settings/llm/test")
   [ "$(echo "$R" | jget "d.get('ok')")" = "True" ] && ok "LLM 연결 성공 (프로필: $(echo "$R" | jget "d['profile']"))" || bad "LLM 연결 실패" "$(echo "$R" | head -c 400)"
