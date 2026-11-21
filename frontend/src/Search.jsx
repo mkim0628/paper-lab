@@ -13,7 +13,7 @@ export default function Search() {
     setBusy(true); setErr("");
     try {
       const r = await api.search(q.trim(), start);
-      setRes(start ? { ...r, items: [...res.items, ...r.items] } : r);
+      setRes(start ? { ...r, items: [...res.items, ...r.items.filter((i) => !res.items.some((j) => j.arxiv_id === i.arxiv_id))] } : r);
     } catch (e) { setErr(e.message); }
     setBusy(false);
   };

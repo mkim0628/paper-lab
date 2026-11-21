@@ -105,17 +105,29 @@ async def _get(client: httpx.AsyncClient, url: str, **kw) -> httpx.Response:
     return r
 
 
+_FIELD_RE = re.compile(r"\b(all|ti|au|abs|cat|co|jr|rn|id):")
+
+
+async def _query(c: httpx.AsyncClient, q: str, start: int, max_results: int) -> tuple[list[dict], int]:
+    r = await _get(c, config.ARXIV_API, params={"search_query": q, "start": start, "max_results": max_results, "sortBy": "relevance"})
+    return parse_feed(r.text)
+
+
 async def search(query: str, start: int = 0, max_results: int = 20, client: httpx.AsyncClient | None = None) -> dict:
-    params = {
-        "search_query": query if re.search(r"\b(all|ti|au|abs|cat|co|jr|rn|id):", query) else f"all:{query}",
-        "start": start,
-        "max_results": max_results,
-        "sortBy": "relevance",
-    }
+    """일반 키워드는 '제목 구문 일치'를 먼저, 이어서 전체 필드 검색 결과를 붙인다.
+    (arXiv의 all: 검색만으로는 정확한 제목의 논문이 상위에 오지 않는 경우가 많음)"""
+    query = query.strip()
     async with _maybe(client) as c:
-        r = await _get(c, config.ARXIV_API, params=params)
-    items, total = parse_feed(r.text)
-    return {"total": total, "start": start, "items": items}
+        if _FIELD_RE.search(query):  # 사용자가 arXiv 쿼리 문법을 직접 지정
+            items, total = await _query(c, query, start, max_results)
+            return {"total": total, "start": start, "items": items}
+        phrase: list[dict] = []
+        if start == 0:
+            phrase, _ = await _query(c, f'ti:"{query}"', 0, 5)
+        items, total = await _query(c, f"all:{query}", start, max_results)
+    seen = {p["arxiv_id"] for p in phrase}
+    items = phrase + [i for i in items if i["arxiv_id"] not in seen]
+    return {"total": max(total, len(items)), "start": start, "items": items[: max_results + len(phrase)]}
 
 
 async def fetch_metadata(arxiv_id: str, client: httpx.AsyncClient | None = None) -> dict:

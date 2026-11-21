@@ -71,7 +71,7 @@ export default function CodePanel({ id, meta, onMeta }) {
 
       {data.hf_models?.length > 0 && (
         <div className="cand">
-          <b>🤗 이 논문을 태그한 Hugging Face 모델 (체크포인트 후보)</b>
+          <b>🤗 이 논문을 태그한 Hugging Face 모델</b> <span className="muted">(인용한 모델 전체 포함 — 이 논문의 공식 체크포인트가 아닐 수 있음)</span>
           <ul className="ev">{data.hf_models.map((m) => <li key={m.id}><a href={`https://huggingface.co/${m.id}`} target="_blank" rel="noreferrer">{m.id}</a> <span className="muted">↓{m.downloads.toLocaleString()}</span></li>)}</ul>
         </div>
       )}

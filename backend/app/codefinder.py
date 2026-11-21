@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import unicodedata
 from datetime import datetime, timezone
 
 import httpx
@@ -22,8 +23,8 @@ ENV_FILES = {"dockerfile", "requirements.txt", "environment.yml", "environment.y
 _GH = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9][A-Za-z0-9_.-]*)/([A-Za-z0-9_.-]+)", re.I)
 # 'our code', 'code is available', 'we release' 처럼 *이 논문의* 코드임을 시사하는 문맥
 _CTX = re.compile(
-    r"(\bour\b[^.\n]{0,60}(code|implementation|model|repo|release)|code[^.\n]{0,50}(available|released|publicly|at)\b|"
-    r"\bwe (release|open-?source|make[^.\n]{0,40}available|provide)\b|available (at|on|from)\b|(project|code|implementation)\s*(page)?\s*[:：]\s*$)",
+    r"(\bour\b[^.]{0,60}(code|implementation|model|repo|release)|code[^.]{0,90}(available|released|publicly)\b|"
+    r"\bwe (release|open-?source|make[^.]{0,40}available|provide)\b|(project|code|implementation)\s*(page)?\s*[:：]\s*$)",
     re.I,
 )
 _NOT_REPO_OWNERS = {"features", "topics", "about", "pricing", "login", "sponsors", "orgs", "settings", "marketplace", "collections", "explore", "apps"}
@@ -58,7 +59,10 @@ def extract_paper_links(meta: dict, fulltext: str) -> dict[str, dict]:
     out: dict[str, dict] = {}
 
     def scan(text: str, page: int, force_ctx: bool = False) -> None:
-        # PDF 줄바꿈으로 끊긴 URL 복구: 'github.com/owner/\nrepo'
+        # PDF 추출 아티팩트 정리: 합자(ﬂ→fl 등), 그리고 줄바꿈으로 끊긴 URL
+        #   'github.com/\nowner/repo' (실제 Transformer/BERT 논문에서 발생), 'github.com/owner/\nrepo'
+        text = unicodedata.normalize("NFKC", text)
+        text = re.sub(r"(github\.com/)\s*\n\s*(?=[\w])", r"\1", text, flags=re.I)
         text = re.sub(r"(github\.com/[\w.-]+/)\s*\n\s*(?=[\w])", r"\1", text, flags=re.I)
         for m in _GH.finditer(text):
             cr = _clean_repo(m.group(1), m.group(2))
@@ -105,11 +109,24 @@ async def _hf_paper(c: httpx.AsyncClient, arxiv_id: str) -> tuple[list[str], lis
     return repos, models
 
 
+def _check_gh(r: httpx.Response) -> None:
+    """403/429 가 rate limit 인지 접근 거부인지 구분해서 정확한 메시지를 낸다."""
+    if r.status_code < 400:
+        return
+    try:
+        msg = (r.json() or {}).get("message", "")
+    except Exception:  # noqa: BLE001
+        msg = ""
+    if r.status_code == 429 or (r.status_code == 403 and ("rate limit" in msg.lower() or r.headers.get("x-ratelimit-remaining") == "0")):
+        raise RuntimeError("GitHub rate limit (PAPERLAB_GITHUB_TOKEN 설정 권장)")
+    if r.status_code in (401, 403):
+        raise RuntimeError(f"GitHub 접근 거부 (HTTP {r.status_code}): {msg[:140] or '토큰/네트워크 정책 확인'}")
+    r.raise_for_status()
+
+
 async def _gh_search(c: httpx.AsyncClient, q: str) -> list[str]:
     r = await c.get(f"{config.GITHUB_API}/search/repositories", params={"q": q, "per_page": 5}, headers=_gh_headers())
-    if r.status_code in (403, 429):
-        raise RuntimeError("GitHub 검색 rate limit (PAPERLAB_GITHUB_TOKEN 설정 권장)")
-    r.raise_for_status()
+    _check_gh(r)
     return [i["full_name"] for i in r.json().get("items", [])]
 
 
@@ -118,9 +135,7 @@ async def _enrich(c: httpx.AsyncClient, full_name: str) -> dict | None:
     r = await c.get(f"{config.GITHUB_API}/repos/{full_name}", headers=_gh_headers())
     if r.status_code in (404, 451):
         return None
-    if r.status_code in (403, 429):
-        raise RuntimeError("GitHub API rate limit (PAPERLAB_GITHUB_TOKEN 설정 권장)")
-    r.raise_for_status()
+    _check_gh(r)
     j = r.json()
     info = {
         "full_name": j.get("full_name", full_name),
@@ -162,10 +177,11 @@ def evaluate(info: dict, meta: dict, paper_link: dict | None, hf_linked: bool) -
     score = 0
     readme = info.pop("readme", "")
     aid = meta["arxiv_id"]
-    sig = {"ctx_early": False, "paper_link": bool(paper_link), "hf": hf_linked, "readme_arxiv": False, "readme_title": False, "author": False}
+    sig = {"ctx": False, "ctx_early": False, "paper_link": bool(paper_link), "hf": hf_linked, "readme_arxiv": False, "readme_title": False, "author": False}
 
     if paper_link:
         pg = ", ".join(f"p.{p}" for p in sorted(paper_link["pages"])[:4])
+        sig["ctx"] = paper_link["ctx"]
         if paper_link["ctx_early"]:
             sig["ctx_early"] = True
             score += 60
@@ -212,9 +228,9 @@ def evaluate(info: dict, meta: dict, paper_link: dict | None, hf_linked: bool) -
         ev.append("README 에 체크포인트/가중치 언급")
 
     # 분류 (규칙 기반, 점수는 정렬용)
-    if (sig["ctx_early"] or (sig["hf"] and sig["readme_arxiv"])) and not info["fork"]:
+    if (sig["ctx_early"] or (sig["hf"] and sig["readme_arxiv"]) or (sig["ctx"] and sig["readme_arxiv"])) and not info["fork"]:
         cls = "official"
-    elif sig["hf"] or (sig["paper_link"] and sig["readme_arxiv"]) or (sig["readme_arxiv"] and sig["author"] and not info["fork"]):
+    elif sig["ctx"] or sig["hf"] or (sig["paper_link"] and sig["readme_arxiv"]) or (sig["readme_arxiv"] and sig["author"] and not info["fork"]):
         cls = "likely-official"
     elif sig["readme_arxiv"] or sig["readme_title"]:
         cls = "community"
@@ -260,9 +276,10 @@ async def find(arxiv_id: str) -> dict:
         results = await asyncio.gather(*[_enrich(c, f["name"]) for f in order], return_exceptions=True)
 
     cands = []
+    repo_errors: list[str] = []
     for f, info in zip(order, results):
         if isinstance(info, Exception):
-            errors.append(f"{f['name']}: {info}")
+            repo_errors.append(str(info))
             continue
         if info is None:  # 존재하지 않는 repo (링크 오추출 등)
             continue
@@ -270,6 +287,12 @@ async def find(arxiv_id: str) -> dict:
         cand = evaluate(info, meta, pl, hf_linked=f["name"].lower() in (h.lower() for h in hf_repos))
         cand["found_via"] = sorted(f["via"])
         cands.append(cand)
+
+    if repo_errors:  # 같은 원인의 오류는 한 줄로 집계
+        from collections import Counter
+
+        for msg, n in Counter(repo_errors).items():
+            errors.append(f"repo 상세 조회 실패 {n}건: {msg}")
 
     # 초반 '우리 코드' 링크가 여러 개면 모호 → 다른 근거가 없는 쪽은 likely-official 로 강등
     top = [c for c in cands if c["classification"] == "official" and c["signals"]["ctx_early"] and not (c["signals"]["hf"] or c["signals"]["readme_arxiv"])]

@@ -5,6 +5,20 @@
 | 영역 | 샌드박스 검증 | 서버에서 확인 필요 |
 |---|---|---|
 | 파일 저장 / 이력 / API | ✅ pytest | – |
+| arXiv 검색·조회·PDF 다운로드 | ✅ **실제 arXiv** (smoke.sh 통과) | – |
+| 본문 추출 (PyMuPDF) | ✅ **실제 논문 5편** (Transformer/BERT/ViT/LoRA/Llama 2) | 수식 많은 논문 품질 |
+| 본문 내 코드 링크 추출 | ✅ **실제 논문 5편**에서 공식 repo/베이스라인 구분 확인 | 더 많은 논문 |
+| Hugging Face API | ✅ **실제 HF** (`githubRepo`, 모델 목록 파싱 확인) | – |
+| GitHub 검색 | ✅ 실제 호출 성공 | – |
+| GitHub repo 상세 조회 (README/별/환경파일) → 분류 | ⚠️ mock만 (샌드박스 정책상 repo 조회 403) | **실제 GitHub API 응답, rate limit** |
+| LLM 호출 (스트리밍, base_url, 프로필, 키 마스킹) | ✅ mock Messages API | **실제 API 키 / 사내 게이트웨이** |
+| UI (검색→추가→편집→AI 초안→인용 링크→검색→코드 선택) | ✅ 헤드리스 브라우저 + mock | 실제 브라우저의 **PDF 뷰어 렌더링, `#page=N` 이동** |
+| Docker 빌드/실행 | ❌ | **전부** |
+
+> 실제 서비스 검증에서 발견해 고친 것: 키워드 검색 순위(정확한 제목이 상위에 오지 않음), PDF 줄바꿈 때문에 놓친 코드 링크(`github.com/⏎owner/repo`, 합자 `ﬂ`), 문장 중간 줄바꿈으로 놓친 "code is available" 문맥, GitHub 접근 거부를 rate limit으로 오표시, HF 모델 목록 라벨 오류(인용한 모델 전체이지 공식 체크포인트가 아님).
+
+---|---|---|
+| 파일 저장 / 이력 / API | ✅ pytest | – |
 | arXiv Atom 파싱, ID/URL 파싱 | ✅ fixture | **실제 arXiv 응답, PDF 다운로드** |
 | 본문 추출(PyMuPDF), 로컬 전문 검색 | ✅ 합성 PDF | 실제 논문 PDF (수식·2단 레이아웃) 품질 |
 | LLM 호출 (스트리밍, base_url, 프로필, 키 마스킹) | ✅ mock Messages API | **실제 API 키 / 사내 게이트웨이** |
@@ -98,12 +112,13 @@ LLM 프로필 등록(3번) 후에는 `SMOKE_LLM=1 ./scripts/smoke.sh` 로 연결
 
 - GitHub 무인증은 rate limit이 낮습니다(검색 분당 10회). 오류 배너에 rate limit이 보이면 서버 셸에서 `export PAPERLAB_GITHUB_TOKEN=<권한 없는 public 읽기용 PAT>` 후 `docker compose up -d` 하세요 (compose가 컨테이너로 전달).
 - 사내망에서 `api.github.com` / `huggingface.co`가 막혀 있으면 해당 소스는 오류 배너로 표시되고, 논문 본문 링크 기반 결과는 그대로 나옵니다.
-- ⚠️ HF API(`/api/papers/<id>`의 `githubRepo`, `/api/models?filter=arxiv:<id>`)의 응답 형태는 문서 기반 가정이라 **실제로 확인된 적이 없습니다**. HF 관련 항목(2번 근거 "Hugging Face Papers 가 연결", 9번)이 전혀 안 나오면 알려주세요.
+- HF API는 실제 응답으로 확인했습니다: `githubRepo`는 일부 논문에만 있고(예: Llama 2 ✓, Transformer/LoRA/BERT/ViT ✗) 그래서 HF는 보조 소스입니다. 9번의 HF 모델 목록은 "이 논문을 태그한 모델 전체"(논문을 인용한 모델 포함)이므로 공식 체크포인트와 다를 수 있습니다.
+- 기대 결과(실제 논문 본문 링크 기준): Transformer→`tensorflow/tensor2tensor`, BERT→`google-research/bert`, ViT→`google-research/vision_transformer`, LoRA→`microsoft/LoRA`, Llama 2→`facebookresearch/llama` 가 후보 상위에 `공식` 계열로 나와야 합니다.
 
 ## 4. 개발자용 자동 테스트 (선택)
 
 ```bash
-cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 38개
+cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 46개
 ```
 
 ## 5. 문제 해결

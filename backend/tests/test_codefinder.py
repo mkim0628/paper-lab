@@ -99,6 +99,8 @@ def test_arxiv_comment_link_counts_as_code_context():
     [
         ("ctx link early", {}, {"pages": [1], "ctx": True, "ctx_early": True}, False, "", "official"),
         ("hf + readme arxiv", {}, None, True, "see arXiv:1706.03762", "official"),
+        ("ctx on later page, no README", {}, {"pages": [9], "ctx": True, "ctx_early": False}, False, "", "likely-official"),
+        ("ctx on later page + README arxiv", {}, {"pages": [9], "ctx": True, "ctx_early": False}, False, "arXiv:1706.03762", "official"),
         ("hf only", {}, None, True, "", "likely-official"),
         ("paper link + readme arxiv", {}, {"pages": [5], "ctx": False, "ctx_early": False}, False, "1706.03762", "likely-official"),
         ("baseline link only", {}, {"pages": [5], "ctx": False, "ctx_early": False}, False, "", "weak"),
@@ -191,7 +193,7 @@ def test_source_failures_are_reported_not_fatal(client, monkeypatch):
         if request.url.host == "huggingface.co":
             raise httpx.ConnectError("blocked")
         if request.url.path == "/search/repositories":
-            return httpx.Response(403)
+            return httpx.Response(403, json={"message": "API rate limit exceeded"})
         return handler(request)
 
     monkeypatch.setattr(codefinder, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(broken)))
@@ -210,3 +212,45 @@ def test_stale_states_reset_on_startup(tmp_path, monkeypatch, gh):
     with TestClient(app) as c:
         m = c.get("/api/papers/1706.03762").json()
     assert m["code_status"] == "failed" and m["pdf_status"] == "failed"
+
+
+def test_gh_error_messages_distinguish_rate_limit_from_denied():
+    rl = httpx.Response(403, json={"message": "API rate limit exceeded for 1.2.3.4"})
+    with pytest.raises(RuntimeError, match="rate limit"):
+        codefinder._check_gh(rl)
+    denied = httpx.Response(403, json={"message": "GitHub access to this repository is not enabled for this session."})
+    with pytest.raises(RuntimeError, match="접근 거부.*not enabled"):
+        codefinder._check_gh(denied)
+    codefinder._check_gh(httpx.Response(200, json={}))
+
+
+def test_repeated_repo_errors_are_aggregated(client, monkeypatch):
+    _seed()
+
+    def denied(request):
+        if request.url.path.startswith("/repos/"):
+            return httpx.Response(403, json={"message": "not enabled"})
+        return handler(request)
+
+    monkeypatch.setattr(codefinder, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(denied)))
+    d = client.post("/api/papers/1706.03762/code/search").json()
+    agg = [e for e in d["errors"] if e.startswith("repo 상세 조회 실패")]
+    assert len(agg) == 1 and "접근 거부" in agg[0]
+
+
+# 실제 논문(PDF) 추출 텍스트에서 가져온 문장들 — 회귀 방지
+REAL_SNIPPETS = {
+    # Attention Is All You Need (p.9): 'github.com/' 바로 뒤에서 줄바꿈 + code...available 문맥이 길다
+    "tensorflow/tensor2tensor": "The code we used to train and evaluate our models is available at https://github.com/\ntensorflow/tensor2tensor.\n",
+    # BERT (p.2): 위와 같은 줄바꿈 패턴
+    "google-research/bert": "state-of-the-art. Code and pre-trained mod-\nels are available at https://github.com/\ngoogle-research/bert.\n",
+    # PDF 합자: 'ﬂ' (U+FB02)
+    "tensorflow/tensor2tensor ": "Our implementation is open-source: https://github.com/tensorﬂow/tensor2tensor",
+}
+
+
+@pytest.mark.parametrize("expected,text", list(REAL_SNIPPETS.items()))
+def test_real_pdf_extraction_artifacts(expected, text):
+    links = codefinder.extract_paper_links(META, f'<page n="9">\n{text}\n</page>')
+    assert expected.strip() in links, links
+    assert links[expected.strip()]["ctx"] is True

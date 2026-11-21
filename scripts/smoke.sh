@@ -35,7 +35,7 @@ for i in $(seq 1 45); do
   { [ "$PDF" = "failed" ] || [ "$FT" = "ready" ] || [ "$FT" = "failed" ]; } && break; sleep 2
 done
 [ "$PDF" = "ready" ] && ok "PDF 다운로드 완료" || bad "PDF 상태: $PDF" "서버에서 arxiv.org:443 접근 확인 (논문 화면의 '재시도' 버튼도 가능)"
-req "$BASE/api/papers/$ID/pdf" | head -c 4 | grep -q '%PDF' && ok "PDF 파일 서빙 (매직 바이트 %PDF)" || bad "PDF 서빙 실패"
+[ "$(req "$BASE/api/papers/$ID/pdf" 2>/dev/null | head -c 4 2>/dev/null)" = "%PDF" ] && ok "PDF 파일 서빙 (매직 바이트 %PDF)" || bad "PDF 서빙 실패"
 [ "$FT" = "ready" ] && ok "본문 추출 완료 ($(echo "$M" | jget "d.get('pages')") pages)" || bad "본문 추출 상태: $FT"
 
 echo "[4] 리뷰 저장 / 검색"

@@ -300,3 +300,36 @@ def test_ca_bundle_client_is_accepted_by_sdk(tmp_path):
     subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(tmp_path / "k.pem"), "-out", str(pem), "-subj", "/CN=corp-ca", "-days", "1"], check=True, capture_output=True)
     c = llm_mod()._client({"provider": "anthropic", "api_key": "k", "base_url": "https://llm.corp/v1", "ca_bundle": str(pem)})
     assert str(c.base_url).startswith("https://llm.corp")
+
+
+def test_search_puts_exact_title_phrase_first_and_dedups():
+    import asyncio
+
+    import httpx
+
+    def entry(i, t):
+        return f'<entry><id>http://arxiv.org/abs/{i}v1</id><title>{t}</title><summary>s</summary><author><name>A</name></author></entry>'
+
+    def feed(*e):
+        return f'<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"><opensearch:totalResults>9</opensearch:totalResults>{"".join(e)}</feed>'
+
+    seen = []
+
+    def handler(req):
+        q = req.url.params["search_query"]
+        seen.append(q)
+        if q.startswith("ti:"):
+            return httpx.Response(200, text=feed(entry("1706.03762", "Attention Is All You Need")))
+        return httpx.Response(200, text=feed(entry("2101.00001", "Other"), entry("1706.03762", "Attention Is All You Need")))
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            a = await arxiv.search("attention is all you need", client=c)
+            b = await arxiv.search("ti:foo", client=c)
+            return a, b
+
+    config.ARXIV_MIN_INTERVAL = 0
+    a, b = asyncio.run(run())
+    assert [i["arxiv_id"] for i in a["items"]] == ["1706.03762", "2101.00001"]  # 제목 일치 먼저, 중복 제거
+    assert seen[:2] == ['ti:"attention is all you need"', "all:attention is all you need"]
+    assert seen[2] == "ti:foo"  # 필드 문법은 그대로 전달
