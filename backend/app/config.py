@@ -21,3 +21,4 @@ OPENALEX_API_KEY = os.environ.get("PAPERLAB_OPENALEX_API_KEY", "")
 # 선택: OpenAlex polite pool 용 연락처. 개인정보이므로 사용자가 직접 설정한 경우에만 전송한다.
 OPENALEX_MAILTO = os.environ.get("PAPERLAB_OPENALEX_MAILTO", "")
 RELATED_BACKOFF = float(os.environ.get("PAPERLAB_RELATED_BACKOFF", "3.0"))
+ARXIV_RETRY_BACKOFF = float(os.environ.get("PAPERLAB_ARXIV_RETRY_BACKOFF", "3.0"))

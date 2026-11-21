@@ -336,3 +336,37 @@ def test_search_puts_exact_title_phrase_first_and_dedups():
     assert [i["arxiv_id"] for i in a["items"]] == ["1706.03762", "2101.00001"]  # 제목 일치 먼저, 중복 제거
     assert seen[:2] == ['ti:"attention is all you need"', "all:attention is all you need"]
     assert seen[2] == "ti:foo"  # 필드 문법은 그대로 전달
+
+
+def test_arxiv_retries_on_429_then_succeeds_and_gives_clear_error_when_persistent():
+    import asyncio
+
+    import httpx
+
+    config.ARXIV_MIN_INTERVAL = 0
+    config.ARXIV_RETRY_BACKOFF = 0
+    calls = {"n": 0}
+
+    def flaky(req):
+        calls["n"] += 1
+        return httpx.Response(429) if calls["n"] <= 2 else httpx.Response(200, text=FEED)
+
+    async def ok():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(flaky)) as c:
+            return await arxiv.fetch_metadata("1706.03762", client=c)
+
+    assert asyncio.run(ok())["arxiv_id"] == "1706.03762" and calls["n"] == 3
+
+    async def always():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(429))) as c:
+            return await arxiv.fetch_metadata("1706.03762", client=c)
+
+    with pytest.raises(arxiv.ArxivError, match="rate limit"):
+        asyncio.run(always())
+
+    async def notfound():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500))) as c:
+            return await arxiv.fetch_metadata("1706.03762", client=c)
+
+    with pytest.raises(arxiv.ArxivError, match="요청 실패"):
+        asyncio.run(notfound())  # 5xx 는 재시도 대상이 아님

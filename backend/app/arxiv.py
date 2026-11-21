@@ -95,10 +95,27 @@ _limiter = _RateLimiter()
 _HEADERS = {"User-Agent": "paper-lab/0.1 (personal research tool)"}
 
 
-async def _get(client: httpx.AsyncClient, url: str, **kw) -> httpx.Response:
-    await _limiter.wait()
+async def _get(client: httpx.AsyncClient, url: str, tries: int = 4, **kw) -> httpx.Response:
+    """arXiv 는 일시적으로 429/503 을 돌려줄 수 있다 → Retry-After 또는 지수 백오프로 재시도."""
+    last: httpx.Response | None = None
+    for i in range(tries):
+        await _limiter.wait()
+        try:
+            r = await client.get(url, headers=_HEADERS, follow_redirects=True, timeout=60, **kw)
+        except httpx.HTTPError as e:
+            raise ArxivError(f"arXiv 요청 실패: {e}") from e
+        if r.status_code not in (429, 503):
+            break
+        last = r
+        if i < tries - 1:
+            try:
+                wait = float(r.headers.get("retry-after") or 0)
+            except ValueError:
+                wait = 0.0
+            await asyncio.sleep(min(wait or config.ARXIV_RETRY_BACKOFF * (2**i), 20))
+    else:
+        raise ArxivError(f"arXiv 가 요청을 거절했습니다 (HTTP {last.status_code}, rate limit). 잠시 후 다시 시도하세요") from None  # type: ignore[union-attr]
     try:
-        r = await client.get(url, headers=_HEADERS, follow_redirects=True, timeout=60, **kw)
         r.raise_for_status()
     except httpx.HTTPError as e:
         raise ArxivError(f"arXiv 요청 실패: {e}") from e
