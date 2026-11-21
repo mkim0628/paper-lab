@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import arxiv, codefinder, config, figures, fulltext, llm, localsearch, review_gen, storage
+from . import arxiv, codefinder, config, figures, fulltext, llm, localsearch, related, review_gen, storage
 
 log = logging.getLogger("paperlab")
 
@@ -22,7 +22,7 @@ async def lifespan(_: FastAPI):
     config.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
     # 서버가 백그라운드 작업 도중 종료되면 상태가 고착되므로 시작 시 정리
     for m in storage.list_papers():
-        stale = {k: "failed" for k, v in (("pdf_status", "pending"), ("fulltext_status", "pending"), ("code_status", "searching"), ("figures_status", "extracting")) if m.get(k) == v}
+        stale = {k: "failed" for k, v in (("pdf_status", "pending"), ("fulltext_status", "pending"), ("code_status", "searching"), ("figures_status", "extracting"), ("related_status", "fetching")) if m.get(k) == v}
         if stale:
             storage.update_meta(m["arxiv_id"], **stale)
     yield
@@ -153,6 +153,27 @@ def _sync_code_meta(arxiv_id: str, data: dict) -> None:
     )
 
 
+async def _find_related(arxiv_id: str) -> dict:
+    storage.update_meta(arxiv_id, related_status="fetching")
+    try:
+        data = await related.build(arxiv_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("related fetch failed for %s: %s", arxiv_id, e)
+        storage.update_meta(arxiv_id, related_status="failed")
+        raise
+    related.save(arxiv_id, data)
+    ok = bool(data["references"] or data["citing"].get("top") or data["similar"])
+    storage.update_meta(arxiv_id, related_status="done" if ok else "failed", related_count=len(data["references"]))
+    return data
+
+
+async def _find_related_bg(arxiv_id: str) -> None:
+    try:
+        await _find_related(arxiv_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _find_code_bg(arxiv_id: str) -> None:
     try:
         await _find_code(arxiv_id)
@@ -172,9 +193,10 @@ async def add_paper(body: AddPaper, bg: BackgroundTasks):
     except arxiv.ArxivError as e:
         raise HTTPException(502, str(e))
     meta = storage.create(meta)
-    meta = storage.update_meta(meta["arxiv_id"], code_status="searching", figures_status="extracting")  # 화면이 완료까지 폴링하도록
+    meta = storage.update_meta(meta["arxiv_id"], code_status="searching", figures_status="extracting", related_status="fetching")  # 화면이 완료까지 폴링하도록
     bg.add_task(_fetch_pdf, meta["arxiv_id"])
     bg.add_task(_find_code_bg, meta["arxiv_id"])  # PDF/본문 처리 뒤에 순차 실행
+    bg.add_task(_find_related_bg, meta["arxiv_id"])
     return meta
 
 
@@ -411,6 +433,52 @@ def list_figures(arxiv_id: str):
     aid = _require(arxiv_id)
     data = _load_figs(aid) or {"page_sizes": [], "items": [], "stats": {}}
     return {**data, "status": storage.get_meta(aid).get("figures_status")}
+
+
+# ---------- 관련 연구 ----------
+def _annotate(data: dict) -> dict:
+    """라이브러리에 이미 있는 논문 표시 (조회 시점 기준)."""
+    have = {m["arxiv_id"] for m in storage.list_papers()}
+
+    def mark(lst):
+        for p in lst or []:
+            p["in_library"] = bool(p.get("arxiv_id")) and arxiv.base_id(p["arxiv_id"]) in have
+
+    mark(data.get("references"))
+    mark((data.get("citing") or {}).get("top"))
+    mark((data.get("citing") or {}).get("recent"))
+    mark(data.get("similar"))
+    return data
+
+
+@app.get("/api/papers/{arxiv_id:path}/related")
+def get_related(arxiv_id: str):
+    aid = _require(arxiv_id)
+    data = related.load(aid) or {"references": [], "citing": {"top": [], "recent": [], "total": None}, "similar": [], "errors": [], "fetched_at": None, "guide": None}
+    return {**_annotate(data), "tiers": related.TIERS, "status": storage.get_meta(aid).get("related_status")}
+
+
+@app.post("/api/papers/{arxiv_id:path}/related/refresh")
+async def refresh_related(arxiv_id: str):
+    aid = _require(arxiv_id)
+    try:
+        data = await _find_related(aid)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"관련 연구 조회 실패: {e}")
+    return {**_annotate(data), "tiers": related.TIERS, "status": storage.get_meta(aid).get("related_status")}
+
+
+@app.post("/api/papers/{arxiv_id:path}/related/guide")
+async def related_guide(arxiv_id: str):
+    aid = _require(arxiv_id)
+    data = related.load(aid)
+    try:
+        g = await asyncio.to_thread(related.generate_guide, storage.get_meta(aid), data)
+    except (llm.LLMError, related.RelatedError) as e:
+        raise HTTPException(502, str(e))
+    data["guide"] = g
+    related.save(aid, data)
+    return g
 
 
 # ---------- 공개 코드 탐색 ----------

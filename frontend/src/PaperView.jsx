@@ -3,6 +3,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { api, STATUSES } from "./api.js";
 import CodePanel from "./CodePanel.jsx";
+import RelatedPanel from "./RelatedPanel.jsx";
 import FiguresPanel, { FigureLightbox } from "./FiguresPanel.jsx";
 
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -51,7 +52,7 @@ export default function PaperView({ id }) {
   useEffect(() => { loadFigs(); }, [loadFigs, meta?.figures_status]);
 
   // PDF 다운로드 / 본문 추출 / 그림 추출이 끝날 때까지 폴링 (둘 다 백그라운드 작업)
-  const busyBg = meta && (meta.pdf_status === "pending" || (meta.pdf_status === "ready" && !meta.fulltext_status) || meta.code_status === "searching" || meta.figures_status === "extracting");
+  const busyBg = meta && (meta.pdf_status === "pending" || (meta.pdf_status === "ready" && !meta.fulltext_status) || meta.code_status === "searching" || meta.figures_status === "extracting" || meta.related_status === "fetching");
   useEffect(() => {
     if (!busyBg) return;
     const t = setInterval(() => api.get(id).then((m) => setMeta((cur) => ({ ...cur, ...m }))), 2000);
@@ -182,11 +183,14 @@ export default function PaperView({ id }) {
               <button className={tab === "figures" ? "on" : ""} onClick={() => setTab("figures")}>
                 그림{meta.figure_count != null ? ` ${meta.figure_count}` : meta.figures_status === "extracting" ? " …" : ""}
               </button>
+              <button className={tab === "related" ? "on" : ""} onClick={() => setTab("related")}>
+                관련 연구{meta.related_count != null ? ` ${meta.related_count}` : meta.related_status === "fetching" ? " …" : ""}
+              </button>
               <button className={tab === "code" ? "on" : ""} onClick={() => setTab("code")}>
                 코드{meta.code?.selected ? " ✓" : meta.code?.no_official ? " (직접구현)" : meta.code_status === "searching" ? " …" : ""}
               </button>
             </div>
-            {tab !== "code" && tab !== "figures" && <>
+            {tab !== "code" && tab !== "figures" && tab !== "related" && <>
             <div className="tabs">
               <button className={mode === "edit" ? "on" : ""} onClick={() => setMode("edit")}>편집</button>
               <button className={mode === "preview" ? "on" : ""} onClick={() => setMode("preview")}>미리보기</button>
@@ -206,6 +210,7 @@ export default function PaperView({ id }) {
           </div>
           {err && <p className="error pad">{err}</p>}
           {tab === "code" ? <CodePanel id={id} meta={meta} onMeta={setMeta} />
+            : tab === "related" ? <RelatedPanel id={id} meta={meta} onMeta={setMeta} />
             : tab === "figures" ? <FiguresPanel id={id} meta={meta} data={figData} reload={async () => { await loadFigs(); setMeta(await api.get(id)); }} onInsert={insertFigure} onOpen={(it) => setLightbox(it.id)} />
             : mode === "edit"
             ? <textarea ref={taRef} spellCheck={false} value={text[tab]} onChange={(e) => edit(e.target.value)}

@@ -8,4 +8,7 @@ services:
     environment:
       # 선택: GitHub rate limit 완화용 토큰 (셸 환경변수 또는 .env 파일로 전달)
       - PAPERLAB_GITHUB_TOKEN=${PAPERLAB_GITHUB_TOKEN:-}
+      # 선택: 관련 연구 조회용 무료 API 키 (공유 rate limit/예산 회피). OpenAlex 는 키가 없으면 후속 연구 상위 목록을 못 만들 수 있음
+      - PAPERLAB_S2_API_KEY=${PAPERLAB_S2_API_KEY:-}
+      - PAPERLAB_OPENALEX_API_KEY=${PAPERLAB_OPENALEX_API_KEY:-}
     restart: unless-stopped

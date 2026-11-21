@@ -44,6 +44,9 @@ export const api = {
   figDelete: (id, fid) => req(`/papers/${id}/figures/${fid}`, { method: "DELETE" }),
   figUrl: (id, it) => `/api/papers/${id}/figures/${it.id}.png?v=${(it.bbox || []).join("-")}`,
   pageUrl: (id, n, dpi = 100) => `/api/papers/${id}/pages/${n}.png?dpi=${dpi}`,
+  related: (id) => req(`/papers/${id}/related`),
+  relatedRefresh: (id) => req(`/papers/${id}/related/refresh`, { method: "POST" }),
+  relatedGuide: (id) => req(`/papers/${id}/related/guide`, { method: "POST" }),
   pdfUrl: (id) => `/api/papers/${id}/pdf`,
 };
 

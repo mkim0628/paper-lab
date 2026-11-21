@@ -65,8 +65,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     import httpx
 
-    from app import codefinder
+    from app import codefinder, related
 
+    monkeypatch.setattr(related, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))))
+    monkeypatch.setattr(config, "RELATED_BACKOFF", 0.0)
     # 코드 탐색의 외부 호출은 기본적으로 전부 404 (테스트는 네트워크를 쓰지 않는다)
     monkeypatch.setattr(codefinder, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))))
     items, _ = arxiv.parse_feed(FEED)

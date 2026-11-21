@@ -7,6 +7,7 @@
 | 파일 저장 / 이력 / API | ✅ pytest | – |
 | arXiv 검색·조회·PDF 다운로드 | ✅ **실제 arXiv** (smoke.sh 통과) | – |
 | **그림/표 추출 (Phase 4)** | ✅ **실제 논문 5편 156개 캡션 중 151개 영역 인식**, 합성 PDF 레이아웃 테스트, 브라우저 E2E (갤러리·삽입·드래그 편집) | 본인 관심 분야 논문 (아래 3.6) |
+| **관련 연구 (Phase 5)** | ✅ **실제 Semantic Scholar** (참고문헌 41~131개, 5편), 규칙/폴백 mock 테스트, 브라우저 E2E | **OpenAlex 실제 응답**(샌드박스는 무인증 예산 소진), 본인 논문의 티어 판단 |
 | 본문 추출 (PyMuPDF) | ✅ **실제 논문 5편** (Transformer/BERT/ViT/LoRA/Llama 2) | 수식 많은 논문 품질 |
 | 본문 내 코드 링크 추출 | ✅ **실제 논문 5편**에서 공식 repo/베이스라인 구분 확인 | 더 많은 논문 |
 | Hugging Face API | ✅ **실제 HF** (`githubRepo`, 모델 목록 파싱 확인) | – |
@@ -146,10 +147,42 @@ LLM 프로필 등록(3번) 후에는 `SMOKE_LLM=1 ./scripts/smoke.sh` 로 연결
 
 **알려진 한계**: 알고리즘 박스(Algorithm 1)는 추출하지 않음(캡션이 `Algorithm`) · 그림 안에 본문 같은 긴 문단이 있으면 잘릴 수 있음 · 스캔 PDF 미지원 · arXiv HTML(원본 이미지) 경로는 아직 없음(PDF 크롭만)
 
+## 3.7 관련 연구 지도 (Phase 5)
+
+**API 키 (권장)**: 무인증 호출은 공유 rate limit/예산을 쓰므로 실패할 수 있습니다 (샌드박스에서 실제로 겪음). 둘 다 무료입니다.
+```bash
+export PAPERLAB_S2_API_KEY=...         # Semantic Scholar (선택, 429 완화)
+export PAPERLAB_OPENALEX_API_KEY=...   # OpenAlex (후속 연구 '인용 수 상위' 목록에 사실상 필수)
+docker compose up -d                   # compose 가 컨테이너로 전달
+```
+OpenAlex 키가 없거나 예산이 소진되면 후속 연구는 Semantic Scholar 로 대체하되, 인용 논문이 1000편을 넘으면 정렬이 불가능해 **목록을 비우고 키가 필요하다고 안내**합니다(틀린 '상위'를 보여주지 않기 위함). OpenAlex 연락처(`PAPERLAB_OPENALEX_MAILTO`)는 직접 설정한 경우에만 전송됩니다.
+
+**샌드박스 검증에서 확인한 것 (실제 Semantic Scholar 데이터)** — 티어 판정이 납득되는지 본인의 도메인 지식으로 봐 주세요
+
+| 논문 | 참고문헌 | `기반 필독` (저명 + 이 논문이 실제로 의존) |
+|---|---|---|
+| Transformer | 41 | Bahdanau attention 1편. Adam/ResNet/LayerNorm 은 인용이 압도적이어도 `방법 계보`(범용 도구) |
+| BERT | 63 | ELMo, Transformer, SQuAD, MNLI. ⚠ GPT-1 은 S2 에서 인용 수 0(중복 레코드) → "인용 수 신뢰 불가" 표시 |
+| ViT | 64 | LeCun 1989 CNN, BERT, Transformer, MoCo, Adam 등 7편 |
+| LoRA | 65 | Prefix-Tuning, Adapters, BERT, AdamW, GPT-3 등 6편 |
+| Llama 2 | 131 | GPT-3, PPO, LLaMA, MMLU, AdamW 등 13편 |
+
+| # | 동작 | 기대 결과 |
+|---|---|---|
+| 1 | 논문 추가 후 "관련 연구 N" 탭 | 선행 연구 목록. 티어 필터/정렬, 인용 수·연평균·영향력 표시·점수 구성요소 |
+| 2 | **본인 관심 논문 3~5편**으로 `기반 필독`/`직접 비교·베이스라인` | 전문가 눈에 납득되는지 (⚠ 이 규칙은 위 5편으로 다듬은 것) |
+| 3 | 항목의 "인용 맥락" 펼치기 | 이 논문 본문에서 해당 논문을 인용한 문장 |
+| 4 | "후속 연구" 탭 | OpenAlex 키가 있으면 전체/최근 2년 상위 인용 후속 논문. 없으면 안내 문구 |
+| 5 | "+ 라이브러리에 추가" | arXiv ID가 있는 논문이 라이브러리에 추가됨 (이후 버튼이 "열기"로 바뀜) |
+| 6 | "읽기 가이드 생성 (AI)" (LLM 프로필 필요) | 기술 축 3~5개, 읽는 순서. **제목·연도·수치는 DB 값**이고 AI 는 묶음/이유만. 제공되지 않은 논문을 참조하면 제거되고 건수 표시 |
+| 7 | 가이드 내용의 타당성 | ⚠ 실제 LLM 출력은 아직 확인하지 못했습니다. 축 분류와 읽는 순서가 맞는지 평가해 주세요 |
+
+**알려진 한계**: 인용 맥락(`contexts`)은 S2 가 제공하는 만큼만(없는 참고문헌도 있음) · 최신 논문은 S2/OpenAlex 색인이 늦음 · 티어 임계값(상위 25%, 1만 회, 3회 인용)은 휴리스틱 · 기술 축 클러스터링은 LLM 가이드에서만 수행(임베딩 기반 군집은 미구현)
+
 ## 4. 개발자용 자동 테스트 (선택)
 
 ```bash
-cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 59개
+cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 74개
 ```
 
 ## 5. 문제 해결

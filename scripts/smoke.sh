@@ -70,10 +70,24 @@ if [ "$FT" = "ready" ] || [ "$PDF" = "ready" ]; then
   fi
 else echo "  (건너뜀 — PDF 없음)"; fi
 
+echo "[5.5] 관련 연구 (Semantic Scholar / OpenAlex — 실제 외부 접속, 공유 rate limit 으로 느릴 수 있음)"
+R=$(T=240 req -X POST "$BASE/api/papers/$ID/related/refresh")
+NR=$(echo "$R" | jget "len(d['references'])")
+if [ -z "$NR" ]; then bad "관련 연구 API 실패" "$(echo "$R" | head -c 300)"
+elif [ "$NR" = "0" ]; then bad "참고문헌 0건" "$(echo "$R" | jget "'; '.join(d['errors'])")"
+else
+  ok "참고문헌 ${NR}건 (기반 필독 $(echo "$R" | jget "sum(1 for r in d['references'] if r['tier']=='foundation')")건)"
+  echo "     기반 필독: $(echo "$R" | jget "', '.join(r['title'][:40] for r in d['references'] if r['tier']=='foundation')")"
+  echo "     후속 상위 $(echo "$R" | jget "len(d['citing']['top'])")건 / 유사 $(echo "$R" | jget "len(d['similar'])")건"
+  [ "$(echo "$R" | jget "len(d['errors'])")" != "0" ] && echo "     ⚠ 소스 문제: $(echo "$R" | jget "'; '.join(d['errors'])")"
+fi
+
 echo "[6] LLM (선택)"
 if [ "${SMOKE_LLM:-0}" = "1" ]; then
   R=$(T=120 req -X POST "$BASE/api/settings/llm/test")
   [ "$(echo "$R" | jget "d.get('ok')")" = "True" ] && ok "LLM 연결 성공 (프로필: $(echo "$R" | jget "d['profile']"))" || bad "LLM 연결 실패" "$(echo "$R" | head -c 400)"
+  G=$(T=180 req -X POST "$BASE/api/papers/$ID/related/guide")
+  [ "$(echo "$G" | jget "len(d['axes'])")" -ge 1 ] 2>/dev/null && ok "읽기 가이드 생성 (기술 축 $(echo "$G" | jget "len(d['axes'])")개, 제거된 가짜 참조 $(echo "$G" | jget "d['dropped_unknown_refs']")건)" || bad "읽기 가이드 생성 실패" "$(echo "$G" | head -c 300)"
 else echo "  (건너뜀 — Settings에서 프로필 등록 후 SMOKE_LLM=1 로 실행)"; fi
 
 [ "$EXISTED" = "0" ] && req -o /dev/null -X DELETE "$BASE/api/papers/$ID" && echo "  (테스트 논문 삭제함)"
