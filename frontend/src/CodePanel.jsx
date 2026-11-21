@@ -42,7 +42,7 @@ export default function CodePanel({ id, meta, onMeta }) {
         {data.searched_at && <span className="muted">마지막 탐색 {data.searched_at.replace("T", " ").slice(0, 16)} UTC</span>}
       </div>
       {err && <p className="error">{err}</p>}
-      {data.errors?.length > 0 && <div className="banner">⚠️ 일부 소스 실패 (결과가 불완전할 수 있음):<br />{data.errors.map((e, i) => <div key={i} className="muted">· {e}</div>)}</div>}
+      {data.errors?.length > 0 && <div className="banner block">⚠️ 일부 소스 실패 (결과가 불완전할 수 있음):<br />{data.errors.map((e, i) => <div key={i} className="muted">· {e}</div>)}</div>}
       {!data.searched_at && !searching && <p className="muted">아직 탐색하지 않았습니다. "다시 탐색"을 눌러 주세요.</p>}
       {data.searched_at && data.candidates.length === 0 && !data.errors?.length && <p className="muted">후보를 찾지 못했습니다. 공개 코드가 없을 가능성이 있습니다 — 아래에서 URL을 직접 추가하거나 '직접 구현'을 선택하세요.</p>}
 

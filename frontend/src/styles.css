@@ -63,3 +63,6 @@ figure.fig img { max-width:100%; display:block; margin:0 auto; } figure.fig figc
 .bbox { position:absolute; border:2px solid #e8590c; background:#e8590c22; pointer-events:none; }
 .bbox .h { position:absolute; width:10px; height:10px; background:#e8590c; border-radius:2px; }
 .bbox .tl { left:-6px; top:-6px; } .bbox .tr { right:-6px; top:-6px; } .bbox .bl { left:-6px; bottom:-6px; } .bbox .br { right:-6px; bottom:-6px; }
+
+.row { flex-wrap:wrap; align-items:center; } .row button, .tabs button { white-space:nowrap; } .row select { flex:0 0 auto; width:auto; }
+.banner.block { display:block; } .banner.block button { margin-left:0; }

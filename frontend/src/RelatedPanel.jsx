@@ -111,7 +111,7 @@ export default function RelatedPanel({ id, meta, onMeta }) {
         {data.fetched_at && <span className="muted">조회 {data.fetched_at.replace("T", " ").slice(0, 16)} UTC</span>}
       </div>
       {err && <p className="error">{err}</p>}
-      {data.errors?.length > 0 && <div className="banner">⚠️ 일부 소스 문제 (결과가 불완전할 수 있음):<br />{data.errors.map((e, i) => <div key={i} className="muted">· {e}</div>)}</div>}
+      {data.errors?.length > 0 && <div className="banner block">⚠️ 일부 소스 문제 (결과가 불완전할 수 있음):<br />{data.errors.map((e, i) => <div key={i} className="muted">· {e}</div>)}</div>}
       <details><summary className="muted">결과를 해석할 때 주의</summary>
         <ul className="ev muted"><li>인용 수는 <b>저명도</b> 지표이지 품질이 아닙니다. 분야·연도마다 편차가 큽니다.</li><li>최근 논문은 인용이 적게 나오므로 "연평균 인용"과 함께 보세요.</li>
           <li>Semantic Scholar/OpenAlex에 누락·중복 레코드가 있을 수 있습니다(⚠ 표시).</li><li>티어와 점수는 규칙 기반이며 구성요소를 그대로 공개합니다. 최종 판단은 본인의 몫입니다.</li></ul></details>
