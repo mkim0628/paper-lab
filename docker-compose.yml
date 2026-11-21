@@ -1,0 +1,8 @@
+services:
+  paperlab:
+    build: .
+    # 외부 노출 금지: localhost에만 바인딩하고 SSH 터널/Tailscale로 접근
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

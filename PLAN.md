@@ -149,6 +149,15 @@ UI: 좌측 PDF 뷰어 / 우측 마크다운 에디터(섹션별 접기), "섹션
 - 로그: SSE 스트리밍, 실행별 `env.lock`(pip freeze, CUDA, 커밋 SHA, 시드) 저장으로 재현성 보장
 - 결과 계약: 재현 코드는 `metrics.json` (`{"metric": value, ...}`) 출력 → UI가 논문 표의 값과 자동 비교
 
+### 4.5 LLM 연결 프로필 (사내/사외 전환) — 확정
+사외에서는 외부 Anthropic API 키, 사내에서는 사내 키/게이트웨이를 쓰도록 **프로필 방식**으로 설계한다.
+- 프로필 = `{name, provider, base_url, api_key, model}`. Settings 화면에서 여러 개 등록하고 "활성 프로필"을 전환
+- `provider`: `anthropic`(직접 API 또는 사내 프록시/게이트웨이 — `base_url`만 바꿈) / `bedrock` / `vertex` (사내가 클라우드 경유일 경우)
+- 키는 **서버 측에만 저장** (`data/secrets.json`, 파일 권한 0600 또는 `.env`), 브라우저로는 마스킹해서만 반환. 로그에 출력 금지
+- 사내 환경에서는 사내 프록시 CA 인증서가 필요할 수 있어 CA bundle 경로 옵션 제공
+- 프로필별 모델명/허용 모델이 다를 수 있으므로 모델명은 프로필에 포함
+- 구현 시점: Phase 2 (LLM 리뷰 초안)
+
 ---
 
 ## 5. 개발 단계 (MVP 우선)
@@ -179,9 +188,9 @@ UI: 좌측 PDF 뷰어 / 우측 마크다운 에디터(섹션별 접기), "섹션
 
 ## 7. 확정이 필요한 사항 (제 권장 기본값 포함)
 
-1. **서버 사양**: GPU 종류/대수, Docker + NVIDIA Container Toolkit 설치 여부 → *없으면 설치 가이드 제공*
-2. **LLM 사용**: 리뷰 초안에 Claude API 키 사용 가능한가? → *기본: 사용 (키는 서버 `.env`에만 저장)*
-3. **프론트 스택**: React+Vite vs 경량 HTMX → *기본: React+Vite (PDF 뷰어/에디터 UX 우위)*
+1. **서버 사양 (확정)**: A100×8, H100×8 서버 각각 보유, Docker + NVIDIA Container Toolkit 설치 가능. → 서버별 러너(GPU 타입 선택) 지원 필요
+2. **LLM 사용 (확정)**: 사내/사외 키를 프로필로 전환 (4.5 참고)
+3. **프론트 스택 (확정)**: React+Vite
 4. **관심 분야**: 주 대상 도메인(LLM, vision, RL 등)에 따라 베이스 Docker 이미지·재현 템플릿을 맞춤 → *미지정 시 PyTorch+CUDA 단일 이미지로 시작*
 5. **접근 방식**: 서버 외부 접근 필요 여부 (SSH 터널 / Tailscale / 사내망)
 6. **재현 코드 repo 정책**: 논문별 별도 repo vs 모노레포(`repro/<arxiv_id>/`) → *기본: 모노레포 하위 디렉터리 + 공식 코드는 gitignore된 clone*
