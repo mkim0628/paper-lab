@@ -37,6 +37,13 @@ export const api = {
   codeSearch: (id) => req(`/papers/${id}/code/search`, { method: "POST" }),
   codeAdd: (id, url) => req(`/papers/${id}/code/add`, { method: "POST", body: { url } }),
   codeSelect: (id, full_name, no_official = false) => req(`/papers/${id}/code/select`, { method: "PUT", body: { full_name, no_official } }),
+  figures: (id) => req(`/papers/${id}/figures`),
+  figuresExtract: (id) => req(`/papers/${id}/figures/extract`, { method: "POST" }),
+  figPatch: (id, fid, body) => req(`/papers/${id}/figures/${fid}`, { method: "PUT", body }),
+  figAdd: (id, body) => req(`/papers/${id}/figures`, { method: "POST", body }),
+  figDelete: (id, fid) => req(`/papers/${id}/figures/${fid}`, { method: "DELETE" }),
+  figUrl: (id, it) => `/api/papers/${id}/figures/${it.id}.png?v=${(it.bbox || []).join("-")}`,
+  pageUrl: (id, n, dpi = 100) => `/api/papers/${id}/pages/${n}.png?dpi=${dpi}`,
   pdfUrl: (id) => `/api/papers/${id}/pdf`,
 };
 

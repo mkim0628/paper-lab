@@ -135,6 +135,7 @@ def write_text(arxiv_id: str, name: str, content: str) -> bool:
     """저장. review.md는 내용이 바뀌면 이전 버전을 history에 보관. 변경 여부 반환."""
     d = paper_dir(arxiv_id)
     target = d / name
+    target.parent.mkdir(parents=True, exist_ok=True)
     old = target.read_text(encoding="utf-8") if target.exists() else None
     if old == content:
         return False

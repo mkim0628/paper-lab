@@ -44,9 +44,22 @@ def join_sections(head: str, secs: list[tuple[str, str]]) -> str:
     return head + "".join(f"{t}\n{b}" for t, b in secs)
 
 
-def generate_full(meta: dict, fulltext: str, template: str) -> str:
+def _figures_block(figs: list[dict] | None) -> str:
+    items = [f for f in (figs or []) if f.get("bbox") and not f.get("hidden")]
+    if not items:
+        return ""
+    lines = [f'- id={f["id"]} | {f["label"]} (p.{f["page"]}): {f["caption"][:300]}' for f in items[:40]]
+    return (
+        "\n\n<figures>\n" + "\n".join(lines) + "\n</figures>\n"
+        "위 그림/표 중 해당 내용을 설명할 때 가장 도움이 되는 것은 리뷰 본문에 `![[fig:<id>]]` 형태로 *한 줄에 단독으로* 삽입하세요 "
+        "(예: `![[fig:figure-1]]`). 그림이 실제로 보여주는 내용은 캡션과 본문 언급에 근거해서만 서술하고, 보이지 않는 내용을 추측하지 마세요."
+    )
+
+
+def generate_full(meta: dict, fulltext: str, template: str, figs: list[dict] | None = None) -> str:
     user = (
         _paper_block(meta, fulltext)
+        + _figures_block(figs)
         + "\n\n아래 템플릿의 모든 섹션 제목(## N. ...)과 순서를 그대로 유지하면서 각 섹션을 채워 리뷰 초안을 작성하세요. "
         "첫 줄 제목과 인용문(> ...)도 그대로 유지하세요.\n\n<template>\n" + template + "\n</template>"
     )

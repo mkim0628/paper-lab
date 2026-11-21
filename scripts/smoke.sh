@@ -38,6 +38,17 @@ done
 [ "$(req "$BASE/api/papers/$ID/pdf" 2>/dev/null | head -c 4 2>/dev/null)" = "%PDF" ] && ok "PDF 파일 서빙 (매직 바이트 %PDF)" || bad "PDF 서빙 실패"
 [ "$FT" = "ready" ] && ok "본문 추출 완료 ($(echo "$M" | jget "d.get('pages')") pages)" || bad "본문 추출 상태: $FT"
 
+echo "[3.5] 그림/표 추출 (실제 논문 PDF)"
+FIG=""
+for i in $(seq 1 30); do FIG=$(req "$BASE/api/papers/$ID" | jget "d.get('figures_status')"); { [ "$FIG" = "ready" ] || [ "$FIG" = "failed" ]; } && break; sleep 2; done
+if [ "$FIG" = "ready" ]; then
+  FR=$(req "$BASE/api/papers/$ID/figures"); NF=$(echo "$FR" | jget "d['stats']['with_region']"); NC=$(echo "$FR" | jget "d['stats']['captions']")
+  # Transformer 논문은 Figure 5개 + Table 4개 = 9 (골든 기준값)
+  [ "$ID" = "1706.03762" ] && [ "$NF" = "9" ] && ok "그림/표 9/9 추출 (기대값과 일치)" || { [ "${NF:-0}" -ge 1 ] 2>/dev/null && ok "그림/표 ${NF}/${NC} 영역 추출" || bad "그림/표 추출 결과 없음 (captions=$NC)"; }
+  [ "$(req -o /dev/null -w '%{http_code}' "$BASE/api/papers/$ID/figures/figure-1.png")" = "200" ] && ok "그림 이미지 서빙 (figure-1.png)" || bad "그림 이미지 서빙 실패"
+  [ "$(req -o /dev/null -w '%{http_code}' "$BASE/api/papers/$ID/pages/1.png?dpi=60")" = "200" ] && ok "PDF 페이지 렌더링 (영역 편집기용)" || bad "페이지 렌더링 실패"
+else bad "그림 추출 상태: $FIG" "논문 화면 '그림' 탭의 '다시 추출', 서버 로그 확인"; fi
+
 echo "[4] 리뷰 저장 / 검색"
 MARK="smoke-$(date +%s)"
 req -o /dev/null -X PUT "$BASE/api/papers/$ID/notes" -H 'Content-Type: application/json' -d "{\"content\":\"$MARK\"}"

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import shutil
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import arxiv, codefinder, config, fulltext, llm, localsearch, review_gen, storage
+from . import arxiv, codefinder, config, figures, fulltext, llm, localsearch, review_gen, storage
 
 log = logging.getLogger("paperlab")
 
@@ -20,7 +22,7 @@ async def lifespan(_: FastAPI):
     config.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
     # 서버가 백그라운드 작업 도중 종료되면 상태가 고착되므로 시작 시 정리
     for m in storage.list_papers():
-        stale = {k: "failed" for k, v in (("pdf_status", "pending"), ("fulltext_status", "pending"), ("code_status", "searching")) if m.get(k) == v}
+        stale = {k: "failed" for k, v in (("pdf_status", "pending"), ("fulltext_status", "pending"), ("code_status", "searching"), ("figures_status", "extracting")) if m.get(k) == v}
         if stale:
             storage.update_meta(m["arxiv_id"], **stale)
     yield
@@ -74,6 +76,42 @@ async def _fetch_pdf(arxiv_id: str) -> None:
             storage.update_meta(arxiv_id, pdf_status="failed")
         return
     await _extract(arxiv_id)
+    await _extract_figures(arxiv_id)
+
+
+async def _extract_figures(arxiv_id: str) -> None:
+    """캡션 앵커 방식 그림/표 추출. 사용자가 수정/수동 추가/숨김 처리한 항목은 재추출해도 보존한다."""
+    storage.update_meta(arxiv_id, figures_status="extracting")
+    try:
+        d = storage.paper_dir(arxiv_id) / "figures"
+        tmp = d / ".tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        res = await asyncio.to_thread(figures.extract, storage.paper_dir(arxiv_id) / "paper.pdf", tmp)
+        old = _load_figs(arxiv_id)
+        keep = [i for i in old.get("items", []) if i.get("source") == "manual" or i.get("edited") or i.get("hidden")]
+        keep_ids = {i["id"] for i in keep}
+        merged = keep + [i for i in res["items"] if i["id"] not in keep_ids]
+        for i in res["items"]:
+            if i["file"] and i["id"] not in keep_ids:
+                d.mkdir(parents=True, exist_ok=True)
+                (tmp / i["file"]).replace(d / i["file"])
+        shutil.rmtree(tmp, ignore_errors=True)
+        res["items"] = sorted(merged, key=lambda i: (i["page"], i["kind"] != "figure", i["id"]))
+        _save_figs(arxiv_id, res)
+        storage.update_meta(arxiv_id, figures_status="ready", figure_count=sum(1 for i in res["items"] if i["bbox"] and not i.get("hidden")))
+    except Exception as e:  # noqa: BLE001
+        log.warning("figure extraction failed for %s: %s", arxiv_id, e)
+        if storage.exists(arxiv_id):
+            storage.update_meta(arxiv_id, figures_status="failed")
+
+
+def _load_figs(arxiv_id: str) -> dict:
+    t = storage.read_text(arxiv_id, "figures/figures.json")
+    return json.loads(t) if t else {}
+
+
+def _save_figs(arxiv_id: str, data: dict) -> None:
+    storage.write_text(arxiv_id, "figures/figures.json", json.dumps(data, ensure_ascii=False, indent=1))
 
 
 async def _extract(arxiv_id: str) -> None:
@@ -134,7 +172,7 @@ async def add_paper(body: AddPaper, bg: BackgroundTasks):
     except arxiv.ArxivError as e:
         raise HTTPException(502, str(e))
     meta = storage.create(meta)
-    meta = storage.update_meta(meta["arxiv_id"], code_status="searching")  # 화면이 완료까지 폴링하도록
+    meta = storage.update_meta(meta["arxiv_id"], code_status="searching", figures_status="extracting")  # 화면이 완료까지 폴링하도록
     bg.add_task(_fetch_pdf, meta["arxiv_id"])
     bg.add_task(_find_code_bg, meta["arxiv_id"])  # PDF/본문 처리 뒤에 순차 실행
     return meta
@@ -222,6 +260,159 @@ async def retry_pdf(arxiv_id: str, bg: BackgroundTasks):
     return {"ok": True}
 
 
+# ---------- 그림 / 표 ----------
+_FID = re.compile(r"^(figure|table)-[A-Za-z0-9]+$")
+
+
+def _fid(fid: str) -> str:
+    if not _FID.match(fid):
+        raise HTTPException(400, "invalid figure id")
+    return fid
+
+
+def _find_fig(data: dict, fid: str) -> dict:
+    it = next((i for i in data.get("items", []) if i["id"] == _fid(fid)), None)
+    if it is None:
+        raise HTTPException(404, "figure not found")
+    return it
+
+
+def _check_bbox(bbox: list[float], data: dict, page: int) -> list[float]:
+    if not 1 <= page <= len(data.get("page_sizes", [])):
+        raise HTTPException(400, "invalid page")
+    w, h = data["page_sizes"][page - 1]
+    x0, y0, x1, y1 = bbox
+    x0, x1, y0, y1 = max(0, min(x0, x1)), min(w, max(x0, x1)), max(0, min(y0, y1)), min(h, max(y0, y1))
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        raise HTTPException(400, "영역이 너무 작습니다")
+    return [round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1)]
+
+
+def _render_item(aid: str, it: dict) -> None:
+    import pymupdf
+
+    with pymupdf.open(storage.paper_dir(aid) / "paper.pdf") as doc:
+        d = storage.paper_dir(aid) / "figures"
+        d.mkdir(exist_ok=True)
+        it["file"] = f"{it['id']}.png"
+        figures.render_clip(doc, it["page"], pymupdf.Rect(*it["bbox"]), d / it["file"])
+
+
+@app.get("/api/papers/{arxiv_id:path}/figures/{fid}.png")
+def figure_png(arxiv_id: str, fid: str):
+    aid = _require(arxiv_id)
+    it = _find_fig(_load_figs(aid), fid)
+    p = storage.paper_dir(aid) / "figures" / (it.get("file") or "")
+    if not it.get("file") or not p.exists():
+        raise HTTPException(404, "no image for this figure")
+    return FileResponse(p, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/api/papers/{arxiv_id:path}/pages/{n:int}.png")
+def page_png(arxiv_id: str, n: int, dpi: int = Query(100, ge=50, le=200)):
+    aid = _require(arxiv_id)
+    pdf = storage.paper_dir(aid) / "paper.pdf"
+    if not pdf.exists():
+        raise HTTPException(404, "pdf not available")
+    try:
+        data = figures.render_page(pdf, n, dpi)
+    except IndexError:
+        raise HTTPException(404, "page out of range")
+    return Response(data, media_type="image/png", headers={"Cache-Control": "max-age=3600"})
+
+
+@app.post("/api/papers/{arxiv_id:path}/figures/extract")
+async def reextract_figures(arxiv_id: str):
+    aid = _require(arxiv_id)
+    if not (storage.paper_dir(aid) / "paper.pdf").exists():
+        raise HTTPException(409, "pdf not available")
+    await _extract_figures(aid)
+    return {**_load_figs(aid), "status": storage.get_meta(aid).get("figures_status")}
+
+
+class FigPatch(BaseModel):
+    bbox: list[float] | None = Field(None, min_length=4, max_length=4)
+    label: str | None = Field(None, max_length=60)
+    caption: str | None = Field(None, max_length=4000)
+    hidden: bool | None = None
+
+
+@app.put("/api/papers/{arxiv_id:path}/figures/{fid}")
+def patch_figure(arxiv_id: str, fid: str, body: FigPatch):
+    aid = _require(arxiv_id)
+    data = _load_figs(aid)
+    it = _find_fig(data, fid)
+    f = body.model_dump(exclude_unset=True)
+    if f.get("bbox") is not None:
+        it["bbox"] = _check_bbox(f["bbox"], data, it["page"])
+        it.update(edited=True, auto=False, side=None)
+        _render_item(aid, it)
+    for k in ("label", "caption", "hidden"):
+        if k in f and f[k] is not None:
+            it[k] = f[k]
+            it["edited"] = True
+    _save_figs(aid, data)
+    storage.update_meta(aid, figure_count=sum(1 for i in data["items"] if i["bbox"] and not i.get("hidden")))
+    return it
+
+
+class FigNew(BaseModel):
+    page: int = Field(ge=1)
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    kind: str = Field("figure", pattern="^(figure|table)$")
+    label: str | None = Field(None, max_length=60)
+    caption: str = Field("", max_length=4000)
+
+
+@app.post("/api/papers/{arxiv_id:path}/figures", status_code=201)
+def add_figure(arxiv_id: str, body: FigNew):
+    aid = _require(arxiv_id)
+    if not (storage.paper_dir(aid) / "paper.pdf").exists():
+        raise HTTPException(409, "pdf not available")
+    data = _load_figs(aid) or {"page_sizes": [], "items": [], "stats": {}}
+    if not data["page_sizes"]:
+        import pymupdf
+
+        with pymupdf.open(storage.paper_dir(aid) / "paper.pdf") as doc:
+            data["page_sizes"] = [[round(p.rect.width, 1), round(p.rect.height, 1)] for p in doc]
+    bbox = _check_bbox(body.bbox, data, body.page)
+    n = 1 + max([int(m.group(1)) for i in data["items"] if (m := re.match(rf"^{body.kind}-m(\d+)$", i["id"]))] + [0])
+    it = {
+        "id": f"{body.kind}-m{n}", "label": body.label or f"{'Figure' if body.kind == 'figure' else 'Table'} (수동 {n})",
+        "kind": body.kind, "page": body.page, "caption": body.caption, "caption_bbox": None, "bbox": bbox, "side": None,
+        "source": "manual", "auto": False, "edited": True, "hidden": False, "file": None, "mentions": [],
+    }
+    _render_item(aid, it)
+    data["items"].append(it)
+    data["items"].sort(key=lambda i: (i["page"], i["kind"] != "figure", i["id"]))
+    _save_figs(aid, data)
+    storage.update_meta(aid, figure_count=sum(1 for i in data["items"] if i["bbox"] and not i.get("hidden")))
+    return it
+
+
+@app.delete("/api/papers/{arxiv_id:path}/figures/{fid}", status_code=204)
+def delete_figure(arxiv_id: str, fid: str):
+    """수동 항목은 삭제, 자동 추출 항목은 숨김 처리(재추출해도 다시 나타나지 않음)."""
+    aid = _require(arxiv_id)
+    data = _load_figs(aid)
+    it = _find_fig(data, fid)
+    if it["source"] == "manual":
+        data["items"] = [i for i in data["items"] if i["id"] != it["id"]]
+        if it.get("file"):
+            (storage.paper_dir(aid) / "figures" / it["file"]).unlink(missing_ok=True)
+    else:
+        it["hidden"] = True
+    _save_figs(aid, data)
+    storage.update_meta(aid, figure_count=sum(1 for i in data["items"] if i["bbox"] and not i.get("hidden")))
+
+
+@app.get("/api/papers/{arxiv_id:path}/figures")
+def list_figures(arxiv_id: str):
+    aid = _require(arxiv_id)
+    data = _load_figs(aid) or {"page_sizes": [], "items": [], "stats": {}}
+    return {**data, "status": storage.get_meta(aid).get("figures_status")}
+
+
 # ---------- 공개 코드 탐색 ----------
 @app.get("/api/papers/{arxiv_id:path}/code")
 def get_code(arxiv_id: str):
@@ -298,7 +489,7 @@ async def generate_review(arxiv_id: str, body: GenBody):
             tpl = storage.REVIEW_TEMPLATE.format(
                 title=meta["title"], authors=", ".join(meta["authors"][:6]), arxiv_id=meta["arxiv_id"]
             )
-            content = await asyncio.to_thread(review_gen.generate_full, meta, ft, tpl)
+            content = await asyncio.to_thread(review_gen.generate_full, meta, ft, tpl, _load_figs(aid).get("items"))
     except llm.LLMError as e:
         raise HTTPException(502, str(e))
     except ValueError as e:

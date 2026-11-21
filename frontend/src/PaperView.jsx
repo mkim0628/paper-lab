@@ -3,11 +3,23 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { api, STATUSES } from "./api.js";
 import CodePanel from "./CodePanel.jsx";
+import FiguresPanel, { FigureLightbox } from "./FiguresPanel.jsx";
 
-// [p.3] 인용을 클릭 가능한 링크로 (클릭 시 PDF가 해당 페이지로 이동)
-const render = (md) =>
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// [p.3] 인용 → 클릭 가능한 링크, ![[fig:figure-3]] → 추출된 그림 임베드
+const render = (md, id, figs) =>
   DOMPurify.sanitize(
-    marked.parse((md || "").replace(/\[p\.(\d+)\]/g, '<a class="cite" data-page="$1">p.$1</a>'), { gfm: true })
+    marked.parse(
+      (md || "")
+        .replace(/!\[\[fig:([A-Za-z0-9-]+)\]\]/g, (_, fid) => {
+          const f = (figs || []).find((x) => x.id === fid && x.file);
+          if (!f) return `<span class="muted">[그림 없음: ${esc(fid)}]</span>`;
+          return `<figure class="fig" data-fig="${esc(fid)}"><img src="${api.figUrl(id, f)}" alt="${esc(f.label)}"><figcaption><b>${esc(f.label)}</b> — ${esc(f.caption.replace(/^(Figure|Fig\.|Table)\s*\S+\s*[:.|]?\s*/i, "").slice(0, 220))}</figcaption></figure>`;
+        })
+        .replace(/\[p\.(\d+)\]/g, '<a class="cite" data-page="$1">p.$1</a>'),
+      { gfm: true }
+    )
   );
 
 export default function PaperView({ id }) {
@@ -21,6 +33,10 @@ export default function PaperView({ id }) {
   const [page, setPage] = useState(1);
   const [gen, setGen] = useState(false);
   const [sec, setSec] = useState(1);
+  const [figData, setFigData] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
+  const taRef = useRef(null);
+  const cursor = useRef(null);
   const dirty = useRef({}); // { review: true, notes: true }
   const latest = useRef(text);
   latest.current = text;
@@ -31,8 +47,11 @@ export default function PaperView({ id }) {
       .catch((e) => setErr(e.message));
   }, [id]);
 
-  // PDF 다운로드 / 본문 추출이 끝날 때까지 폴링 (둘 다 백그라운드 작업)
-  const busyBg = meta && (meta.pdf_status === "pending" || (meta.pdf_status === "ready" && !meta.fulltext_status) || meta.code_status === "searching");
+  const loadFigs = useCallback(() => api.figures(id).then(setFigData).catch(() => setFigData({ items: [], page_sizes: [], stats: {} })), [id]);
+  useEffect(() => { loadFigs(); }, [loadFigs, meta?.figures_status]);
+
+  // PDF 다운로드 / 본문 추출 / 그림 추출이 끝날 때까지 폴링 (둘 다 백그라운드 작업)
+  const busyBg = meta && (meta.pdf_status === "pending" || (meta.pdf_status === "ready" && !meta.fulltext_status) || meta.code_status === "searching" || meta.figures_status === "extracting");
   useEffect(() => {
     if (!busyBg) return;
     const t = setInterval(() => api.get(id).then((m) => setMeta((cur) => ({ ...cur, ...m }))), 2000);
@@ -85,7 +104,19 @@ export default function PaperView({ id }) {
   const reextract = async () => { try { setMeta(await api.reextract(id)); } catch (e) { setErr(e.message); } };
   const onMdClick = (e) => {
     const p = e.target.dataset?.page;
-    if (p) { e.preventDefault(); setPage(+p); }
+    if (p) { e.preventDefault(); setPage(+p); return; }
+    const f = e.target.closest?.("[data-fig]");
+    if (f) setLightbox(f.dataset.fig);
+  };
+  // 그림을 리뷰의 커서 위치(없으면 끝)에 삽입
+  const insertFigure = (it) => {
+    const md = `\n\n![[fig:${it.id}]]\n\n`;
+    setText((t) => {
+      const pos = cursor.current ?? t.review.length;
+      return { ...t, review: t.review.slice(0, pos) + md + t.review.slice(pos) };
+    });
+    cursor.current = null;
+    dirty.current.review = true; setSave("dirty"); setTab("review"); setMode("edit");
   };
   const sections = [...(text.review.matchAll(/^## (\d+)\.\s*(.*)$/gm))].map((m) => ({ n: +m[1], t: m[2] }));
 
@@ -148,11 +179,14 @@ export default function PaperView({ id }) {
             <div className="tabs">
               <button className={tab === "review" ? "on" : ""} onClick={() => setTab("review")}>리뷰</button>
               <button className={tab === "notes" ? "on" : ""} onClick={() => setTab("notes")}>메모</button>
+              <button className={tab === "figures" ? "on" : ""} onClick={() => setTab("figures")}>
+                그림{meta.figure_count != null ? ` ${meta.figure_count}` : meta.figures_status === "extracting" ? " …" : ""}
+              </button>
               <button className={tab === "code" ? "on" : ""} onClick={() => setTab("code")}>
                 코드{meta.code?.selected ? " ✓" : meta.code?.no_official ? " (직접구현)" : meta.code_status === "searching" ? " …" : ""}
               </button>
             </div>
-            {tab !== "code" && <>
+            {tab !== "code" && tab !== "figures" && <>
             <div className="tabs">
               <button className={mode === "edit" ? "on" : ""} onClick={() => setMode("edit")}>편집</button>
               <button className={mode === "preview" ? "on" : ""} onClick={() => setMode("preview")}>미리보기</button>
@@ -171,11 +205,18 @@ export default function PaperView({ id }) {
             </>}
           </div>
           {err && <p className="error pad">{err}</p>}
-          {tab === "code" ? <CodePanel id={id} meta={meta} onMeta={setMeta} /> : mode === "edit"
-            ? <textarea spellCheck={false} value={text[tab]} onChange={(e) => edit(e.target.value)} onBlur={flush} />
-            : <div className="md" onClick={onMdClick} dangerouslySetInnerHTML={{ __html: render(text[tab]) }} />}
+          {tab === "code" ? <CodePanel id={id} meta={meta} onMeta={setMeta} />
+            : tab === "figures" ? <FiguresPanel id={id} meta={meta} data={figData} reload={async () => { await loadFigs(); setMeta(await api.get(id)); }} onInsert={insertFigure} onOpen={(it) => setLightbox(it.id)} />
+            : mode === "edit"
+            ? <textarea ref={taRef} spellCheck={false} value={text[tab]} onChange={(e) => edit(e.target.value)}
+                onBlur={(e) => { cursor.current = e.target.selectionStart; flush(); }} onSelect={(e) => { cursor.current = e.target.selectionStart; }} />
+            : <div className="md" onClick={onMdClick} dangerouslySetInnerHTML={{ __html: render(text[tab], id, figData?.items) }} />}
         </div>
       </div>
+
+      {lightbox && figData?.items.find((i) => i.id === lightbox) && (
+        <FigureLightbox id={id} item={figData.items.find((i) => i.id === lightbox)} onClose={() => setLightbox(null)} onGoto={setPage} onInsert={insertFigure} />
+      )}
 
       {hist && (
         <div className="modal" onClick={() => setHist(null)}>

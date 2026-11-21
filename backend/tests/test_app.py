@@ -218,6 +218,7 @@ def test_generate_review_flow(client, tmp_path, monkeypatch):
     assert r.status_code == 200 and "[p.1]" in r.json()["content"] and r.json()["meta"]["ai_draft"] is True
     # 프롬프트: 본문(페이지 태그)과 템플릿이 들어가고, 인젝션 방어 규칙이 system에 있다
     assert '<page n="1">' in calls[0] and "<template>" in calls[0]
+    assert "<figures>" not in calls[0]  # 추출된 그림이 없으면 블록을 넣지 않는다
     # 덮어쓰기 전 사용자 리뷰가 history에 보관됨
     stamps = client.get("/api/papers/1706.03762/review/history").json()
     assert any("소중한" in client.get(f"/api/papers/1706.03762/review/history/{s}").json()["content"] for s in stamps)
