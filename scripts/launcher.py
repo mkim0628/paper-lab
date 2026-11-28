@@ -127,15 +127,135 @@ def wait_ready(port: int, timeout: float = 40) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- 자동 업데이트 확인
+TITLE = "Paper Lab 업데이트"
+
+
+def git(*args: str, cwd: Path | None = None, timeout: float = 20) -> subprocess.CompletedProcess:
+    """git 실행. 자격증명 프롬프트로 멈추지 않도록 터미널 입력을 막는다 (저장된 자격증명 관리자는 그대로 동작)."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
+    return subprocess.run(["git", *args], cwd=str(cwd or ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env)
+
+
+def check_for_update(root: Path | None = None, fetch_timeout: float = 10) -> dict | None:
+    """원격에 새 커밋이 있는지 확인한다. git 저장소가 아니거나, git 이 없거나, 네트워크/인증 문제면 None (조용히 건너뜀).
+    반환: {"behind": n, "ahead": m, "dirty": bool, "commits": [제목...], "upstream": "origin/브랜치"}"""
+    root = root or ROOT
+    if not (root / ".git").exists() or not shutil.which("git"):
+        return None
+    try:
+        up = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=root)
+        if up.returncode != 0 or "/" not in up.stdout.strip():
+            return None  # 업스트림이 없는 브랜치
+        upstream = up.stdout.strip()
+        if git("fetch", "--quiet", upstream.split("/", 1)[0], cwd=root, timeout=fetch_timeout).returncode != 0:
+            return None
+        behind = int(git("rev-list", "--count", "HEAD..@{u}", cwd=root).stdout.strip() or 0)
+        ahead = int(git("rev-list", "--count", "@{u}..HEAD", cwd=root).stdout.strip() or 0)
+        commits: list[str] = []
+        if behind:
+            commits = [c for c in git("log", "--pretty=format:%s", "-n", "8", "HEAD..@{u}", cwd=root).stdout.splitlines() if c.strip()]
+        dirty = bool(git("status", "--porcelain", "--untracked-files=no", cwd=root).stdout.strip())
+        return {"behind": behind, "ahead": ahead, "dirty": dirty, "commits": commits, "upstream": upstream}
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        return None
+
+
+def update_message(info: dict) -> str:
+    lines = [f"새 업데이트가 {info['behind']}개 있습니다.", ""]
+    lines += [f"  • {c[:90]}" for c in info["commits"]]
+    if info["behind"] > len(info["commits"]):
+        lines.append(f"  … 외 {info['behind'] - len(info['commits'])}개")
+    lines += ["", "지금 자동으로 업데이트하고 시작할까요?", "  [예] 업데이트 후 시작   [아니요] 업데이트 없이 시작"]
+    if info["dirty"]:
+        lines += ["", "※ 수정한 파일이 있습니다. 충돌하면 업데이트를 건너뛰고 현재 버전으로 시작합니다."]
+    return "\n".join(lines)
+
+
+def confirm_dialog(title: str, message: str) -> bool | None:
+    """경고 창으로 예/아니요를 묻는다. True=예, False=아니요, None=물어볼 수단이 없음(창도 터미널도 없음)."""
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            # MB_YESNO | MB_ICONWARNING | MB_TOPMOST — 표준 라이브러리만 사용 (tkinter 설치 여부와 무관)
+            return ctypes.windll.user32.MessageBoxW(0, message, title, 0x4 | 0x30 | 0x40000) == 6
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        try:
+            import tkinter
+            from tkinter import messagebox
+
+            root = tkinter.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            ans = messagebox.askyesno(title, message, icon="warning", parent=root)
+            root.destroy()
+            return bool(ans)
+        except Exception:  # noqa: BLE001  (디스플레이 없음/tkinter 없음)
+            pass
+    if sys.stdin and sys.stdin.isatty():
+        print(f"\n[{title}]\n{message}\n", flush=True)
+        return input("업데이트할까요? [Y/n] ").strip().lower() in ("", "y", "yes", "예")
+    return None
+
+
+def apply_update(root: Path | None = None) -> tuple[bool, str]:
+    try:
+        r = git("pull", "--ff-only", cwd=root or ROOT, timeout=120)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return False, f"{type(e).__name__}"
+    return r.returncode == 0, (r.stderr or r.stdout).strip()[-400:]
+
+
+def maybe_update(mode: str, root: Path | None = None, ask=confirm_dialog) -> str:
+    """시작 시 업데이트 확인. 결과: 'updated' | 'declined' | 'failed' | 'none' | 'skipped'.
+    mode: ask(기본, 경고 창으로 확인) | auto(묻지 않고 업데이트) | off(확인 안 함). 어떤 경우에도 실패하면 현재 버전으로 계속 시작한다."""
+    if mode == "off":
+        return "skipped"
+    info = check_for_update(root)
+    if info is None:
+        return "skipped"
+    if info["behind"] == 0:
+        return "none"
+    if info["ahead"] > 0:
+        say(f"업데이트 {info['behind']}개가 있지만 이 폴더에 로컬 커밋이 있어 자동 업데이트를 건너뜁니다. 직접 `git pull` 하세요.")
+        return "skipped"
+    if mode != "auto":
+        ans = ask(TITLE, update_message(info))
+        if ans is None:
+            say(f"업데이트 {info['behind']}개가 있습니다 (창을 띄울 수 없어 건너뜀). update.bat 으로 업데이트하세요.")
+            return "skipped"
+        if not ans:
+            say("업데이트 없이 시작합니다.")
+            return "declined"
+    say("업데이트하는 중…")
+    ok, msg = apply_update(root)
+    if ok:
+        say("✅ 업데이트했습니다. 새 버전으로 시작합니다.")
+        return "updated"
+    say(f"⚠️ 업데이트하지 못했습니다 (현재 버전으로 시작합니다): {msg}")
+    return "failed"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--check", action="store_true", help="설치/구성만 검증하고 종료")
     ap.add_argument("--reinstall", action="store_true", help="패키지를 다시 설치")
+    ap.add_argument("--no-update-check", action="store_true", help="시작 시 업데이트 확인을 하지 않음")
     a = ap.parse_args(argv)
 
     check_python()
     ensure_env_file()
+
+    # 시작 시 업데이트 확인 (paperlab.env 의 PAPERLAB_UPDATE_CHECK = ask(기본) | auto | off)
+    mode = parse_env_file(ENV_FILE).get("PAPERLAB_UPDATE_CHECK", "ask").lower()
+    if not (a.check or a.no_update_check or os.environ.get("PAPERLAB_UPDATED")) and maybe_update(mode) == "updated":
+        # 런처 자신도 바뀌었을 수 있으므로 새 코드로 다시 시작한다 (무한 반복 방지 플래그)
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), *(argv if argv is not None else sys.argv[1:])], env={**os.environ, "PAPERLAB_UPDATED": "1"})
+        return r.returncode
     ensure_venv()
     ensure_deps(force=a.reinstall)
     ensure_frontend()
