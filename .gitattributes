@@ -1,0 +1,3 @@
+*.bat -text
+*.sh text eol=lf
+*.env.example text eol=lf

@@ -30,7 +30,15 @@
 
 ---
 
-## 0. 준비
+## 0. 가장 쉬운 시작: `start.bat` (Windows) / `./start.sh`
+
+저장소를 받아 `start.bat`을 더블클릭하면 설치(Python 없으면 winget으로 설치, 가상환경, 패키지)부터 실행까지 자동입니다. Node.js는 필요 없습니다. 설정은 처음 실행 때 생기는 `paperlab.env`에서 합니다(선택). 막히면 실행 창에 나온 메시지를 알려 주세요.
+
+> ⚠️ `start.bat`의 Windows 동작은 제가 Windows에서 직접 실행해 보지 못했습니다. 핵심 로직(`scripts/launcher.py`)은 Linux에서 빈 폴더 첫 실행→설치→서버→arXiv 검색까지 검증했고, `.bat`은 파이썬 탐색/설치와 런처 호출만 하도록 최소화했습니다.
+
+아래는 수동으로 설치하는 방법입니다.
+
+## 0.1 준비 (수동)
 
 ```bash
 git clone https://github.com/mkim0628/paper-lab && cd paper-lab
@@ -200,7 +208,7 @@ OpenAlex 키가 없거나 예산이 소진되면 후속 연구는 Semantic Schol
 ## 4. 개발자용 자동 테스트 (선택)
 
 ```bash
-cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 80개
+cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 89개
 ```
 
 ## 5. 문제 해결
