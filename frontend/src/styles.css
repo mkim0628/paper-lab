@@ -152,3 +152,6 @@ button.primary { background:var(--accent); color:#fff; border-color:var(--accent
 .ax-intro h3 { margin:0 0 8px; } .ax-intro .left { text-align:left; font-size:13.5px; }
 .review-doc img { max-width:100%; height:auto; }
 .review-doc > p > img, .review-doc > img { display:block; margin:14px auto; border:1px solid var(--line); border-radius:6px; background:#fff; }
+
+.stale-banner { background:#fff3cd; color:#664d03; border-bottom:1px solid #ffda6a; padding:8px 20px; font-size:14px; }
+@media (prefers-color-scheme: dark) { .stale-banner { background:#3a2f0b; color:#ffe69c; border-color:#665c1f; } }

@@ -232,10 +232,15 @@ OpenAlex 키가 없거나 예산이 소진되면 후속 연구는 Semantic Schol
 ## 4. 개발자용 자동 테스트 (선택)
 
 ```bash
-cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 105개
+cd backend && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && pytest -q   # 106개
 ```
 
 ## 5. 문제 해결
+
+| 증상 | 원인 / 조치 |
+|---|---|
+| 새 기능 버튼을 눌렀더니 **`invalid arXiv id`** 같은 오류 (예: alphaXiv 가져오기) | **서버가 업데이트 전 코드로 실행 중**입니다. 서버를 켜 둔 채 `git pull`을 하면 화면(프런트엔드)만 새 버전이 되고 서버(파이썬)는 옛 코드를 메모리에 들고 있습니다. **실행 창(`start.bat`)을 Ctrl+C 또는 닫기로 끝내고 다시 실행**하세요. 이 버전부터는 화면 상단에 "앱이 업데이트되었는데 서버가 이전 버전으로 실행 중입니다" 배너가 자동으로 뜹니다. |
+
 
 | 증상 | 원인 / 조치 |
 |---|---|

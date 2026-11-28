@@ -372,3 +372,18 @@ def test_arxiv_retries_on_429_then_succeeds_and_gives_clear_error_when_persisten
 
     with pytest.raises(arxiv.ArxivError, match="요청 실패"):
         asyncio.run(notfound())  # 5xx 는 재시도 대상이 아님
+
+
+def test_unknown_subpath_gets_a_restart_hint_and_stale_code_is_detected(client, monkeypatch):
+    # '유효한 ID + 모르는 하위 경로' 는 ID 오류(400)가 아니라 '이 서버에 없는 기능'(404)이라고 알려 준다
+    r = client.get("/api/papers/1706.03762/some-new-feature")
+    assert r.status_code == 404 and "다시 실행" in r.json()["detail"]
+    assert client.get("/api/papers/hep-th/9901001/some-new-feature").status_code == 404  # 구형 ID(슬래시 포함)도
+    assert client.get("/api/papers/not-an-id/pdf").status_code == 400  # 진짜 잘못된 ID 는 그대로 400
+    assert client.get("/api/papers/..%2F..%2Fetc/some").status_code in (400, 404)
+
+    from app import main
+
+    assert client.get("/api/status").json() == {"code_stale": False}
+    monkeypatch.setattr(main, "_STARTED_FINGERPRINT", "코드가 바뀌기 전 해시")  # 서버 시작 후 코드가 업데이트된 상황
+    assert client.get("/api/status").json() == {"code_stale": True}

@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import shutil
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
@@ -31,9 +32,33 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Paper Lab", lifespan=lifespan)
 
 
+def _code_fingerprint() -> str:
+    """서버 코드(backend/app/*.py)의 해시. 서버 시작 시점과 현재 디스크를 비교해 '업데이트 후 재시작 안 함'을 감지한다."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for f in sorted(Path(__file__).parent.glob("*.py")):
+        h.update(f.name.encode())
+        h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+_STARTED_FINGERPRINT = _code_fingerprint()
+
+
+@app.get("/api/status")
+def status():
+    """화면이 주기적으로 확인한다. code_stale=True 면 디스크의 코드가 실행 중인 서버보다 새 버전이라 재시작이 필요하다."""
+    return {"code_stale": _code_fingerprint() != _STARTED_FINGERPRINT}
+
+
 def _valid_id(arxiv_id: str) -> str:
     # 경로 탈출 방지: 반드시 arXiv ID 형식이어야 한다
     if arxiv.parse_arxiv_id(arxiv_id) is None:
+        parts = arxiv_id.split("/")
+        # '<유효한 ID>/<모르는 하위 경로>' → ID 문제가 아니라 이 서버가 모르는 API (화면이 서버보다 새 버전일 때 발생)
+        if any(arxiv.parse_arxiv_id("/".join(parts[:k])) and len(parts) > k for k in (1, 2)):
+            raise HTTPException(404, "이 서버 버전에는 없는 기능입니다. 앱이 업데이트된 뒤 서버를 다시 시작하지 않았을 수 있습니다 — 실행 창(start.bat)을 닫고 다시 실행하세요.")
         raise HTTPException(400, "invalid arXiv id")
     return arxiv.base_id(arxiv_id)
 
