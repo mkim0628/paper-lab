@@ -50,6 +50,8 @@ export const api = {
   chat: (id) => req(`/papers/${id}/chat`),
   chatClear: (id) => req(`/papers/${id}/chat`, { method: "DELETE" }),
   skeleton: (id) => req(`/papers/${id}/review/skeleton`, { method: "POST" }),
+  alphaxiv: (id) => req(`/papers/${id}/alphaxiv`),
+  alphaxivFetch: (id) => req(`/papers/${id}/alphaxiv/fetch`, { method: "POST" }),
   pdfUrl: (id) => `/api/papers/${id}/pdf`,
 };
 

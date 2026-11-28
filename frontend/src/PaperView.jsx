@@ -4,9 +4,10 @@ import { renderMd, outline, isEmptyReview, slug } from "./markdown.js";
 import ChatPanel from "./ChatPanel.jsx";
 import CodePanel from "./CodePanel.jsx";
 import RelatedPanel from "./RelatedPanel.jsx";
+import AlphaxivPanel from "./AlphaxivPanel.jsx";
 import FigurePicker, { BBoxEditor, FigureLightbox } from "./FiguresPanel.jsx";
 
-const SIDE = [["chat", "💬 질문"], ["pdf", "📄 원문"], ["related", "🔗 관련 연구"], ["code", "💻 코드"], ["notes", "📝 메모"]];
+const SIDE = [["chat", "💬 질문"], ["pdf", "📄 원문"], ["alphaxiv", "🅰 alphaXiv"], ["related", "🔗 관련 연구"], ["code", "💻 코드"], ["notes", "📝 메모"]];
 
 export default function PaperView({ id }) {
   const [meta, setMeta] = useState(null);
@@ -25,6 +26,7 @@ export default function PaperView({ id }) {
   const [picker, setPicker] = useState(false);
   const [sel, setSel] = useState(null);
   const [chatPrefill, setChatPrefill] = useState("");
+  const [axAuto, setAxAuto] = useState(false);
   const dirty = useRef({});
   const latest = useRef(text);
   latest.current = text;
@@ -140,6 +142,15 @@ export default function PaperView({ id }) {
     } catch (e) { setErr(e.message); }
     setGen(false);
   };
+  const adoptAlphaxiv = async (d) => {
+    if (text.review.trim() && !isEmptyReview(text.review) && !confirm("현재 리뷰를 alphaXiv 개요로 대체합니다 (현재 내용은 이력에 보관됩니다). 계속할까요?")) return;
+    await flush();
+    const head = `# ${meta.title} — 리뷰 (alphaXiv 개요에서 시작)\n\n> ⚠️ 아래는 alphaXiv의 AI 개요(${d.source_url}, ${d.fetched_at?.slice(0, 10)} 가져옴)를 그대로 옮긴 **외부 AI 생성 요약**이며 검증되지 않았습니다. 수치와 인용 [p.N]을 원문과 대조해 고쳐 쓰세요.\n\n`;
+    edit("review", head + d.markdown);
+    await patch({ ai_draft: true });
+    setMode("read");
+  };
+  const openAlphaxiv = () => { setAxAuto(true); setSide("alphaxiv"); };
   const startBlank = async () => { const r = await api.skeleton(id); edit("review", r.content); setMode("edit"); };
   const openHistory = async () => setHist(await api.history(id));
   const restore = async (stamp) => {
@@ -210,9 +221,11 @@ export default function PaperView({ id }) {
                   <button className="primary" disabled={gen || !ftReady} onClick={() => generate()}>{gen ? "생성 중…" : "🤖 AI로 리뷰 작성"}</button>
                   <button disabled={gen} onClick={startBlank}>✍ 빈 구조로 직접 작성</button>
                 </div>
+                <div className="row center"><button onClick={openAlphaxiv} title="LLM API 키가 필요 없습니다">📚 키 없이 시작: alphaXiv 개요 가져오기</button></div>
                 {!ftReady && <p className="muted">본문 추출 중입니다… 끝나면 AI 작성을 쓸 수 있습니다.</p>}
                 <ul className="muted left">
-                  <li>AI 작성은 설정의 <b>LLM 프로필</b>이 필요하며, 모든 주장에 근거 페이지 [p.N]와 관련 그림이 함께 들어갑니다.</li>
+                  <li>AI 작성은 설정의 <b>LLM 프로필</b>(API 키)이 필요하며, 모든 주장에 근거 페이지 [p.N]와 관련 그림이 함께 들어갑니다.</li>
+                  <li>API 키가 없으면 <b>alphaXiv 개요</b>(이미 생성된 외부 AI 요약)를 가져와 시작할 수 있습니다. 널리 읽힌 논문에서만 가능합니다.</li>
                   <li>이해가 안 되는 부분은 오른쪽 <b>💬 질문</b>에서 먼저 물어봐도 됩니다.</li>
                 </ul>
               </div>
@@ -245,6 +258,7 @@ export default function PaperView({ id }) {
                 : meta.pdf_status === "pending" ? <p className="pad muted">PDF 다운로드 중…</p>
                   : <p className="pad error">PDF 다운로드 실패. <button onClick={() => api.retryPdf(id).then(() => patch({}))}>재시도</button></p>
             )}
+            {side === "alphaxiv" && <AlphaxivPanel id={id} auto={axAuto} onAutoUsed={() => setAxAuto(false)} onCite={(p) => { setPdfPage(p); setSide("pdf"); }} onAdopt={adoptAlphaxiv} />}
             {side === "related" && <RelatedPanel id={id} meta={meta} onMeta={setMeta} />}
             {side === "code" && <CodePanel id={id} meta={meta} onMeta={setMeta} />}
             {side === "notes" && <textarea className="notes-ta" spellCheck={false} value={text.notes} placeholder="자유 메모 (마크다운)" onChange={(e) => edit("notes", e.target.value)} onBlur={flush} />}

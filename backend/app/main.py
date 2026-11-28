@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import arxiv, chat, codefinder, config, figures, fulltext, llm, localsearch, related, review_gen, storage
+from . import alphaxiv, arxiv, chat, codefinder, config, figures, fulltext, llm, localsearch, related, review_gen, storage
 
 log = logging.getLogger("paperlab")
 
@@ -433,6 +433,26 @@ def list_figures(arxiv_id: str):
     aid = _require(arxiv_id)
     data = _load_figs(aid) or {"page_sizes": [], "items": [], "stats": {}}
     return {**data, "status": storage.get_meta(aid).get("figures_status")}
+
+
+# ---------- alphaXiv 개요 (LLM 키 불필요) ----------
+@app.get("/api/papers/{arxiv_id:path}/alphaxiv")
+def get_alphaxiv(arxiv_id: str):
+    """저장된 alphaXiv 개요. 아직 가져온 적이 없으면 fetched=False."""
+    d = alphaxiv.load(_require(arxiv_id))
+    return {**d, "fetched": True} if d else {"fetched": False}
+
+
+@app.post("/api/papers/{arxiv_id:path}/alphaxiv/fetch")
+async def fetch_alphaxiv(arxiv_id: str):
+    """사용자가 버튼을 눌렀을 때만 alphaXiv 에 1건 요청하고 결과를 로컬에 저장."""
+    aid = _require(arxiv_id)
+    try:
+        d = await alphaxiv.fetch(aid)
+    except alphaxiv.AlphaxivError as e:
+        raise HTTPException(502, str(e))
+    alphaxiv.save(aid, d)
+    return {**d, "fetched": True}
 
 
 # ---------- Q&A 채팅 ----------
